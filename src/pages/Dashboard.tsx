@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LineChart, Line, ResponsiveContainer, Tooltip } from 'recharts'
+import { LineChart, Line, ResponsiveContainer, Tooltip, YAxis } from 'recharts'
 import { Search, SortAsc, SortDesc, WifiOff } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../lib/context'
@@ -28,7 +28,7 @@ function assetStatus(a: Asset): 'online' | 'offline' | 'warning' | 'critical' {
   return 'online'
 }
 
-interface SparkData { t: number; v: number | null }
+interface SparkData { t: number; he: number | null; pressure: number | null }
 
 export default function Dashboard() {
   const { selectedCompany } = useApp()
@@ -100,18 +100,25 @@ export default function Dashboard() {
 
   async function loadSparklines(ids: string[]) {
     if (ids.length === 0) return
-    const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+    const sinceMs = Date.now() - 2 * 60 * 60 * 1000
     const { data } = await supabase
       .from('telemetry_samples')
-      .select('asset_id, sampled_at, helium_level')
+      .select('asset_id, ts, values')
       .in('asset_id', ids)
-      .gte('sampled_at', since)
-      .order('sampled_at', { ascending: true })
+      .gte('ts', sinceMs)
+      .order('ts', { ascending: true })
     if (data) {
       const map: Record<string, SparkData[]> = {}
-      for (const row of data) {
+      for (const row of data as Array<{ asset_id: string; ts: number; values: Record<string, number | null> | null }>) {
         if (!map[row.asset_id]) map[row.asset_id] = []
-        map[row.asset_id].push({ t: new Date(row.sampled_at).getTime(), v: row.helium_level })
+        const v = row.values ?? {}
+        const he = v.helium_level ?? v.he_level ?? null
+        const pressure = v.he_pressure ?? v.magnet_pressure_mbar ?? null
+        map[row.asset_id].push({
+          t: typeof row.ts === 'number' ? row.ts : Number(row.ts),
+          he: typeof he === 'number' ? he : null,
+          pressure: typeof pressure === 'number' ? pressure : null,
+        })
       }
       setSparks(map)
     }
@@ -288,8 +295,40 @@ export default function Dashboard() {
                   <div style={{ padding: '6px 8px 0', height: 56 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={spark} margin={{ top: 4, bottom: 4, left: 0, right: 0 }}>
-                        <Line type="monotone" dataKey="v" stroke={he != null && he < 60 ? '#f05252' : he != null && he < 75 ? '#f0b429' : '#22d3a0'} strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                        <Tooltip contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }} formatter={(v: number) => [`${v.toFixed(1)}%`, 'He Level']} labelFormatter={() => ''} />
+                        <YAxis yAxisId="he" hide domain={['auto', 'auto']} />
+                        <YAxis yAxisId="pressure" hide domain={['auto', 'auto']} />
+                        <Line
+                          yAxisId="he"
+                          name="He Level"
+                          type="monotone"
+                          dataKey="he"
+                          stroke={he != null && he < 60 ? '#f05252' : he != null && he < 75 ? '#f0b429' : '#22d3a0'}
+                          strokeWidth={1.5}
+                          dot={false}
+                          isAnimationActive={false}
+                          connectNulls
+                        />
+                        <Line
+                          yAxisId="pressure"
+                          name="He Press"
+                          type="monotone"
+                          dataKey="pressure"
+                          stroke="#00c8dc"
+                          strokeWidth={1.2}
+                          strokeDasharray="3 3"
+                          dot={false}
+                          isAnimationActive={false}
+                          connectNulls
+                        />
+                        <Tooltip
+                          contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
+                          formatter={(value: number, name: string) => {
+                            if (name === 'He Level') return [`${value.toFixed(1)}%`, name]
+                            if (name === 'He Press') return [value.toFixed(2), name]
+                            return [value, name]
+                          }}
+                          labelFormatter={() => ''}
+                        />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
