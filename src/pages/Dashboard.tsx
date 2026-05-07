@@ -64,7 +64,14 @@ export default function Dashboard() {
       .eq('company_id', selectedCompany.id)
       .order('name')
     if (data) {
-      const enriched = data.map((a: Asset) => ({ ...a, status: assetStatus(a) }))
+      const enriched = (data as any[]).map((a: any) => {
+        const asset: Asset = {
+          ...a,
+          site: Array.isArray(a.site) ? a.site[0] ?? null : a.site,
+          telemetry: Array.isArray(a.telemetry) ? a.telemetry[0] ?? null : a.telemetry,
+        }
+        return { ...asset, status: assetStatus(asset) }
+      })
       setAssets(enriched)
       loadSparklines(enriched.map(a => a.id))
     }
