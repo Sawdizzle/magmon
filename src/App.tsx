@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useApp } from './lib/context'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import PublicDashboard from './pages/PublicDashboard'
 import Dashboard from './pages/Dashboard'
 import AssetDetail from './pages/AssetDetail'
 import Gateways from './pages/Gateways'
@@ -28,6 +29,7 @@ export default function App() {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/demo" element={<PublicDashboard />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     )
@@ -43,6 +45,7 @@ export default function App() {
         <Route path="/sites" element={<SitesPage />} />
         <Route path="/thresholds" element={<ThresholdRules />} />
         <Route path="/admin" element={<AdminManage />} />
+        <Route path="/demo" element={<PublicDashboard />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

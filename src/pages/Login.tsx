@@ -92,7 +92,7 @@ export default function Login() {
         )}
 
         <div style={{ marginTop: 28, paddingTop: 16, borderTop: '1px solid var(--border)', textAlign: 'center', fontSize: 11, color: 'var(--text-muted)' }}>
-          Numed, Inc. · Saw Tech Solutions
+          Saw Tech Solutions
         </div>
       </div>
     </div>

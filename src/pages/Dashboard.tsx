@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { LineChart, Line, ResponsiveContainer, Tooltip } from 'recharts'
-import { Search, SortAsc, SortDesc, Wifi, WifiOff, AlertTriangle } from 'lucide-react'
+import { Search, SortAsc, SortDesc, WifiOff } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../lib/context'
 import type { Asset } from '../lib/types'
@@ -51,30 +51,49 @@ export default function Dashboard() {
   async function loadAssets() {
     if (!selectedCompany) return
     setLoading(true)
-    const { data } = await supabase
+
+    // Step 1: assets + sites
+    const { data: assetData } = await supabase
       .from('assets')
-      .select(`
-        id, name, model, serial, magmon_ip, site_id, company_id, gateway_id,
-        site:sites(id, name, city, state),
-        telemetry:v_asset_latest_normalized(
-          asset_id, helium_level, water_flow, chiller_temp,
-          shield_temp, he_pressure, compressor, cs1, coldhead_temp_k, sampled_at
-        )
-      `)
+      .select('id, name, model, serial, magmon_ip, site_id, company_id, gateway_id, site:sites(id, name, city, state, company_id)')
       .eq('company_id', selectedCompany.id)
       .order('name')
-    if (data) {
-      const enriched = (data as any[]).map((a: any) => {
-        const asset: Asset = {
-          ...a,
-          site: Array.isArray(a.site) ? a.site[0] ?? null : a.site,
-          telemetry: Array.isArray(a.telemetry) ? a.telemetry[0] ?? null : a.telemetry,
-        }
-        return { ...asset, status: assetStatus(asset) }
-      })
-      setAssets(enriched)
-      loadSparklines(enriched.map(a => a.id))
-    }
+
+    if (!assetData) { setLoading(false); return }
+
+    // Step 2: latest telemetry via view (correct column names: flow, ts)
+    const ids = assetData.map((a: any) => a.id)
+    const { data: telData } = await supabase
+      .from('v_asset_latest_normalized')
+      .select('asset_id, helium_level, flow, chiller_temp, shield_temp, he_pressure, compressor, cs1, coldhead_temp_k, ts')
+      .in('asset_id', ids)
+
+    const telMap: Record<string, any> = {}
+    telData?.forEach((t: any) => { telMap[t.asset_id] = t })
+
+    const enriched: Asset[] = assetData.map((a: any) => {
+      const tel = telMap[a.id] ?? null
+      const asset: Asset = {
+        ...a,
+        site: Array.isArray(a.site) ? a.site[0] ?? null : a.site,
+        telemetry: tel ? {
+          asset_id: tel.asset_id,
+          helium_level: tel.helium_level,
+          water_flow: tel.flow,
+          chiller_temp: tel.chiller_temp,
+          shield_temp: tel.shield_temp,
+          he_pressure: tel.he_pressure,
+          compressor: tel.compressor,
+          cs1: tel.cs1,
+          coldhead_temp_k: tel.coldhead_temp_k,
+          sampled_at: tel.ts,
+        } : null,
+      }
+      return { ...asset, status: assetStatus(asset) }
+    })
+
+    setAssets(enriched)
+    loadSparklines(ids)
     setLoading(false)
   }
 
@@ -149,15 +168,12 @@ export default function Dashboard() {
 
   return (
     <div className="page">
-      {/* Header */}
       <div className="page-header">
         <div>
           <div className="page-title">Fleet Overview</div>
           <div className="page-subtitle">{assets.length} assets · last refreshed just now</div>
         </div>
-        <button className="btn-ghost" onClick={loadAssets} style={{ fontSize: 12 }}>
-          ↻ Refresh
-        </button>
+        <button className="btn-ghost" onClick={loadAssets} style={{ fontSize: 12 }}>↻ Refresh</button>
       </div>
 
       {/* KPI row */}
@@ -188,12 +204,7 @@ export default function Dashboard() {
       <div className="filter-bar">
         <div style={{ position: 'relative' }}>
           <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
-          <input
-            placeholder="Search assets, sites…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ paddingLeft: 30, maxWidth: 240 }}
-          />
+          <input placeholder="Search assets, sites…" value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 30, maxWidth: 240 }} />
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as StatusFilter)}>
           <option value="all">All Status</option>
@@ -240,19 +251,14 @@ export default function Dashboard() {
             const dotClass = status === 'online' ? 'dot-online' : status === 'warning' ? 'dot-warning' : status === 'critical' ? 'dot-offline' : 'dot-never'
 
             return (
-              <div
-                key={asset.id}
-                className={`asset-card status-${status}`}
-                onClick={() => navigate(`/assets/${asset.id}`)}
-              >
-                {/* Card header */}
+              <div key={asset.id} className={`asset-card status-${status}`} onClick={() => navigate(`/assets/${asset.id}`)}>
                 <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>
-                        {asset.site?.name ?? 'Unassigned'} · {asset.site?.city}
+                        {asset.site?.name ?? 'Unassigned'}{asset.site?.city ? ` · ${asset.site.city}` : ''}
                       </div>
-                      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em' }}>{asset.name}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700 }}>{asset.name}</div>
                     </div>
                     <span className={`badge badge-${status}`}>
                       <span className={`dot ${dotClass}`} />
@@ -261,7 +267,6 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Helium level */}
                 <div style={{ padding: '12px 16px 0' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Helium Level</span>
@@ -276,50 +281,29 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Sparkline */}
                 {spark.length > 1 ? (
                   <div style={{ padding: '6px 8px 0', height: 56 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={spark} margin={{ top: 4, bottom: 4, left: 0, right: 0 }}>
-                        <Line
-                          type="monotone"
-                          dataKey="v"
-                          stroke={he != null && he < 60 ? '#f05252' : he != null && he < 75 ? '#f0b429' : '#22d3a0'}
-                          strokeWidth={1.5}
-                          dot={false}
-                          isAnimationActive={false}
-                        />
-                        <Tooltip
-                          contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
-                          formatter={(v: number) => [`${v.toFixed(1)}%`, 'He Level']}
-                          labelFormatter={() => ''}
-                        />
+                        <Line type="monotone" dataKey="v" stroke={he != null && he < 60 ? '#f05252' : he != null && he < 75 ? '#f0b429' : '#22d3a0'} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                        <Tooltip contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }} formatter={(v: number) => [`${v.toFixed(1)}%`, 'He Level']} labelFormatter={() => ''} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                ) : (
-                  <div style={{ height: 56 }} />
-                )}
+                ) : <div style={{ height: 56 }} />}
 
-                {/* Metrics row */}
                 <div style={{ padding: '8px 16px 14px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
                   <div className="metric-chip">
                     <span className="metric-chip-label">Flow</span>
-                    <span className="metric-chip-value" style={{ color: flow != null && flow < 0.6 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 13 }}>
-                      {flow != null ? `${flow.toFixed(2)}` : '—'}
-                    </span>
+                    <span className="metric-chip-value" style={{ color: flow != null && flow < 0.6 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 13 }}>{flow != null ? flow.toFixed(2) : '—'}</span>
                   </div>
                   <div className="metric-chip">
                     <span className="metric-chip-label">Chiller</span>
-                    <span className="metric-chip-value" style={{ color: temp != null && temp > 75 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 13 }}>
-                      {temp != null ? `${temp.toFixed(1)}°` : '—'}
-                    </span>
+                    <span className="metric-chip-value" style={{ color: temp != null && temp > 75 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 13 }}>{temp != null ? `${temp.toFixed(1)}°` : '—'}</span>
                   </div>
                   <div className="metric-chip">
                     <span className="metric-chip-label">He Press</span>
-                    <span className="metric-chip-value" style={{ fontSize: 13 }}>
-                      {asset.telemetry?.he_pressure != null ? `${asset.telemetry.he_pressure.toFixed(2)}` : '—'}
-                    </span>
+                    <span className="metric-chip-value" style={{ fontSize: 13 }}>{asset.telemetry?.he_pressure != null ? asset.telemetry.he_pressure.toFixed(2) : '—'}</span>
                   </div>
                 </div>
               </div>
