@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../lib/context'
-import { ArrowUpDown } from 'lucide-react'
+import { ArrowUpDown, Search } from 'lucide-react'
+import { naturalCompare, usePersistedState, statusOrder } from '../lib/listControls'
 
 interface GW {
   id: string
@@ -14,6 +15,7 @@ interface GW {
 }
 
 type SortKey = 'hostname' | 'status' | 'site' | 'heartbeat' | 'assets'
+type StatusFilter = 'all' | 'online' | 'offline' | 'never'
 
 function fmt(ts: number | null) {
   if (!ts || ts === 0) return 'Never'
@@ -35,8 +37,13 @@ export default function Gateways() {
   const { selectedCompany } = useApp()
   const [gateways, setGateways] = useState<GW[]>([])
   const [loading, setLoading] = useState(true)
-  const [sortKey, setSortKey] = useState<SortKey>('status')
-  const [sortAsc, setSortAsc] = useState(true)
+
+  // Persisted UI prefs
+  const [sortKey, setSortKey] = usePersistedState<SortKey>('gw.sortKey', 'hostname')
+  const [sortAsc, setSortAsc] = usePersistedState<boolean>('gw.sortAsc', true)
+  const [search, setSearch] = usePersistedState<string>('gw.search', '')
+  const [statusFilter, setStatusFilter] = usePersistedState<StatusFilter>('gw.statusFilter', 'all')
+  const [siteFilter, setSiteFilter] = usePersistedState<string>('gw.siteFilter', 'all')
 
   useEffect(() => {
     if (!selectedCompany) return
@@ -81,23 +88,53 @@ export default function Gateways() {
     else { setSortKey(k); setSortAsc(true) }
   }
 
-  const sorted = [...gateways].sort((a, b) => {
-    let av: string | number = 0, bv: string | number = 0
-    if (sortKey === 'hostname') { av = a.hostname ?? ''; bv = b.hostname ?? '' }
-    else if (sortKey === 'status') {
-      const o = { online: 0, offline: 1, never: 2 }
-      av = o[a.status as keyof typeof o] ?? 2
-      bv = o[b.status as keyof typeof o] ?? 2
+  // Distinct sites that appear in this gateway list, for the filter dropdown
+  const siteOptions = useMemo(() => {
+    const s = new Set<string>()
+    gateways.forEach(g => { if (g.site_name) s.add(g.site_name) })
+    return Array.from(s).sort((a, b) => naturalCompare(a, b))
+  }, [gateways])
+
+  const filtered = useMemo(() => {
+    let list = [...gateways]
+
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      list = list.filter(g =>
+        (g.hostname ?? '').toLowerCase().includes(q) ||
+        (g.site_name ?? '').toLowerCase().includes(q) ||
+        g.id.toLowerCase().includes(q) ||
+        (g.type ?? '').toLowerCase().includes(q)
+      )
     }
-    else if (sortKey === 'site') { av = a.site_name ?? ''; bv = b.site_name ?? '' }
-    else if (sortKey === 'heartbeat') { av = a.last_heartbeat ?? 0; bv = b.last_heartbeat ?? 0 }
-    else if (sortKey === 'assets') { av = a.asset_count; bv = b.asset_count }
-    if (av < bv) return sortAsc ? -1 : 1
-    if (av > bv) return sortAsc ? 1 : -1
-    return 0
-  })
+    if (statusFilter !== 'all') list = list.filter(g => g.status === statusFilter)
+    if (siteFilter !== 'all') list = list.filter(g => g.site_name === siteFilter)
+
+    list.sort((a, b) => {
+      let result = 0
+      if (sortKey === 'hostname') {
+        result = naturalCompare(a.hostname ?? a.id, b.hostname ?? b.id)
+      } else if (sortKey === 'status') {
+        result = statusOrder(a.status) - statusOrder(b.status)
+        if (result === 0) result = naturalCompare(a.hostname ?? a.id, b.hostname ?? b.id)
+      } else if (sortKey === 'site') {
+        result = naturalCompare(a.site_name ?? '', b.site_name ?? '')
+        if (result === 0) result = naturalCompare(a.hostname ?? a.id, b.hostname ?? b.id)
+      } else if (sortKey === 'heartbeat') {
+        result = (a.last_heartbeat ?? 0) - (b.last_heartbeat ?? 0)
+      } else if (sortKey === 'assets') {
+        result = a.asset_count - b.asset_count
+        if (result === 0) result = naturalCompare(a.hostname ?? a.id, b.hostname ?? b.id)
+      }
+      return sortAsc ? result : -result
+    })
+
+    return list
+  }, [gateways, search, statusFilter, siteFilter, sortKey, sortAsc])
 
   const online = gateways.filter(g => g.status === 'online').length
+  const offline = gateways.filter(g => g.status === 'offline').length
+  const never = gateways.filter(g => g.status === 'never').length
 
   function SortTh({ k, label }: { k: SortKey; label: string }) {
     return (
@@ -110,14 +147,71 @@ export default function Gateways() {
     )
   }
 
+  const filtersActive = search.trim() !== '' || statusFilter !== 'all' || siteFilter !== 'all'
+
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <div className="page-title">Gateways</div>
-          <div className="page-subtitle">{online}/{gateways.length} reporting</div>
+          <div className="page-subtitle">
+            {online}/{gateways.length} reporting
+            {filtersActive && ` · showing ${filtered.length}`}
+          </div>
         </div>
         <button className="btn-ghost" onClick={load} style={{ fontSize: 12 }}>↻ Refresh</button>
+      </div>
+
+      {/* KPI row */}
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-label">Total</div>
+          <div className="kpi-value" style={{ color: 'var(--text-primary)' }}>{gateways.length}</div>
+        </div>
+        <div className="kpi-card" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter(statusFilter === 'online' ? 'all' : 'online')}>
+          <div className="kpi-label">Online</div>
+          <div className="kpi-value" style={{ color: 'var(--green)' }}>{online}</div>
+        </div>
+        <div className="kpi-card" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline')}>
+          <div className="kpi-label">Offline</div>
+          <div className="kpi-value" style={{ color: 'var(--red)' }}>{offline}</div>
+        </div>
+        <div className="kpi-card" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter(statusFilter === 'never' ? 'all' : 'never')}>
+          <div className="kpi-label">Never Seen</div>
+          <div className="kpi-value" style={{ color: 'var(--text-muted)' }}>{never}</div>
+        </div>
+      </div>
+
+      {/* Filter bar */}
+      <div className="filter-bar">
+        <div style={{ position: 'relative' }}>
+          <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
+          <input
+            placeholder="Search gateways, sites…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ paddingLeft: 30, maxWidth: 240 }}
+          />
+        </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as StatusFilter)}>
+          <option value="all">All Status</option>
+          <option value="online">Online</option>
+          <option value="offline">Offline</option>
+          <option value="never">Never Seen</option>
+        </select>
+        <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)}>
+          <option value="all">All Sites</option>
+          {siteOptions.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        {filtersActive && (
+          <button
+            className="btn-ghost"
+            style={{ fontSize: 11, padding: '5px 10px' }}
+            onClick={() => { setSearch(''); setStatusFilter('all'); setSiteFilter('all') }}
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -135,9 +229,11 @@ export default function Gateways() {
           <tbody>
             {loading ? (
               <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>Loading…</td></tr>
-            ) : sorted.length === 0 ? (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No gateways found</td></tr>
-            ) : sorted.map(g => (
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                {gateways.length === 0 ? 'No gateways found' : 'No gateways match your filters'}
+              </td></tr>
+            ) : filtered.map(g => (
               <tr key={g.id}>
                 <td style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}>
                   {g.hostname ?? g.id.slice(0, 12)}

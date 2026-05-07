@@ -5,6 +5,7 @@ import { Search, SortAsc, SortDesc, WifiOff } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../lib/context'
 import type { Asset } from '../lib/types'
+import { naturalCompare, usePersistedState, statusOrder } from '../lib/listControls'
 
 type SortKey = 'name' | 'helium' | 'status' | 'site'
 type StatusFilter = 'all' | 'online' | 'offline' | 'warning' | 'critical'
@@ -35,11 +36,11 @@ export default function Dashboard() {
   const [assets, setAssets] = useState<Asset[]>([])
   const [sparks, setSparks] = useState<Record<string, SparkData[]>>({})
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [siteFilter, setSiteFilter] = useState('all')
-  const [sortKey, setSortKey] = useState<SortKey>('name')
-  const [sortAsc, setSortAsc] = useState(true)
+  const [search, setSearch] = usePersistedState<string>('dash.search', '')
+  const [statusFilter, setStatusFilter] = usePersistedState<StatusFilter>('dash.statusFilter', 'all')
+  const [siteFilter, setSiteFilter] = usePersistedState<string>('dash.siteFilter', 'all')
+  const [sortKey, setSortKey] = usePersistedState<SortKey>('dash.sortKey', 'name')
+  const [sortAsc, setSortAsc] = usePersistedState<boolean>('dash.sortAsc', true)
 
   useEffect(() => {
     if (!selectedCompany) return
@@ -135,18 +136,20 @@ export default function Dashboard() {
     if (statusFilter !== 'all') list = list.filter(a => a.status === statusFilter)
     if (siteFilter !== 'all') list = list.filter(a => a.site?.name === siteFilter)
     list.sort((a, b) => {
-      let av: string | number = 0, bv: string | number = 0
-      if (sortKey === 'name') { av = a.name; bv = b.name }
-      else if (sortKey === 'helium') { av = a.telemetry?.helium_level ?? -1; bv = b.telemetry?.helium_level ?? -1 }
-      else if (sortKey === 'status') {
-        const order = { critical: 0, warning: 1, offline: 2, online: 3 }
-        av = order[a.status ?? 'offline'] ?? 2
-        bv = order[b.status ?? 'offline'] ?? 2
+      let result = 0
+      if (sortKey === 'name') {
+        result = naturalCompare(a.name, b.name)
+      } else if (sortKey === 'helium') {
+        result = (a.telemetry?.helium_level ?? -1) - (b.telemetry?.helium_level ?? -1)
+        if (result === 0) result = naturalCompare(a.name, b.name)
+      } else if (sortKey === 'status') {
+        result = statusOrder(a.status) - statusOrder(b.status)
+        if (result === 0) result = naturalCompare(a.name, b.name)
+      } else if (sortKey === 'site') {
+        result = naturalCompare(a.site?.name ?? '', b.site?.name ?? '')
+        if (result === 0) result = naturalCompare(a.name, b.name)
       }
-      else if (sortKey === 'site') { av = a.site?.name ?? ''; bv = b.site?.name ?? '' }
-      if (av < bv) return sortAsc ? -1 : 1
-      if (av > bv) return sortAsc ? 1 : -1
-      return 0
+      return sortAsc ? result : -result
     })
     return list
   }, [assets, search, statusFilter, siteFilter, sortKey, sortAsc])
