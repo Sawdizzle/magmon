@@ -380,9 +380,12 @@ export default function Dashboard() {
                   <div style={{ height: 28, marginTop: 6 }}>
                     {hasHeSpark && spark.length > 1 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={spark} margin={{ top: 2, bottom: 2, left: 0, right: 0 }}>
+                        <LineChart
+                          data={spark.map(p => ({ t: p.t, v: p.he }))}
+                          margin={{ top: 2, bottom: 2, left: 0, right: 0 }}
+                        >
                           <YAxis hide domain={['auto', 'auto']} />
-                          <Line type="monotone" dataKey="he" name="He Level" stroke={heLineColor} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                          <Line type="monotone" dataKey="v" name="He Level" stroke={heLineColor} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
                           <Tooltip
                             contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
                             formatter={(value: number) => [`${value.toFixed(1)}%`, 'He Level']}
@@ -405,9 +408,12 @@ export default function Dashboard() {
                   <div style={{ height: 28 }}>
                     {hasPressSpark && spark.length > 1 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={spark} margin={{ top: 2, bottom: 2, left: 0, right: 0 }}>
+                        <LineChart
+                          data={spark.map(p => ({ t: p.t, v: p.pressure }))}
+                          margin={{ top: 2, bottom: 2, left: 0, right: 0 }}
+                        >
                           <YAxis hide domain={['auto', 'auto']} />
-                          <Line type="monotone" dataKey="pressure" name="He Press" stroke="#00c8dc" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                          <Line type="monotone" dataKey="v" name="He Press" stroke="#00c8dc" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
                           <Tooltip
                             contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
                             formatter={(value: number) => [value.toFixed(2), 'He Press']}
