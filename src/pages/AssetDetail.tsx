@@ -250,31 +250,7 @@ export default function AssetDetail() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 18 }}>
         {/* Left: chart + metrics */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Latest metrics — full set. Cards auto-fit on narrow screens.
-              Each metric defines its own warn/caution thresholds and decimal precision. */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-            {[
-              { label: 'Helium Level', val: latest?.helium_level ?? null,    unit: '%',    decimals: 1, warn: (v: number) => v < 60,  caution: (v: number) => v < 75 },
-              { label: 'He Pressure',  val: latest?.he_pressure ?? null,     unit: 'mbar', decimals: 2, warn: (v: number) => v > 3,   caution: () => false },
-              { label: 'Water Flow',   val: latest?.water_flow ?? null,      unit: 'L/min',decimals: 2, warn: (v: number) => v < 0.6, caution: () => false },
-              { label: 'Chiller Temp', val: latest?.chiller_temp ?? null,    unit: '°C',   decimals: 1, warn: (v: number) => v > 75,  caution: () => false },
-              { label: 'Shield Temp',  val: latest?.shield_temp ?? null,     unit: 'K',    decimals: 1, warn: () => false,            caution: () => false },
-              { label: 'Compressor',   val: latest?.compressor ?? null,      unit: 'PSI',  decimals: 0, warn: () => false,            caution: () => false },
-              { label: 'Cold Head',    val: latest?.coldhead_temp_k ?? null, unit: 'K',    decimals: 1, warn: () => false,            caution: () => false },
-              { label: 'CS1',          val: latest?.cs1 ?? null,             unit: '',     decimals: 2, warn: () => false,            caution: () => false },
-            ].map(m => {
-              const color = m.val == null ? 'var(--text-muted)' : m.warn(m.val) ? 'var(--red)' : m.caution(m.val) ? 'var(--yellow)' : 'var(--green)'
-              return (
-                <div key={m.label} className="card">
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color }}>{m.val != null ? m.val.toFixed(m.decimals) : '—'}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{m.unit || ' '}</div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Combined chart — all metrics overlaid on one axis. Auto-widens 24h -> 7d -> 30d. */}
+          {/* 1. Combined chart — all metrics overlaid. Auto-widens 24h -> 7d -> 30d. */}
           <div className="card" style={{ padding: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>{rangeLabel(historyHours)} Telemetry History (all metrics)</div>
@@ -309,6 +285,29 @@ export default function AssetDetail() {
                   : 'This asset has never reported telemetry'}
               </div>
             )}
+          </div>
+
+          {/* 2. Latest values — fixed 4-column grid (8 metrics → 4×2 layout). */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+            {[
+              { label: 'Helium Level', val: latest?.helium_level ?? null,    unit: '%',    decimals: 1, warn: (v: number) => v < 60,  caution: (v: number) => v < 75 },
+              { label: 'He Pressure',  val: latest?.he_pressure ?? null,     unit: 'mbar', decimals: 2, warn: (v: number) => v > 3,   caution: () => false },
+              { label: 'Water Flow',   val: latest?.water_flow ?? null,      unit: 'L/min',decimals: 2, warn: (v: number) => v < 0.6, caution: () => false },
+              { label: 'Chiller Temp', val: latest?.chiller_temp ?? null,    unit: '°C',   decimals: 1, warn: (v: number) => v > 75,  caution: () => false },
+              { label: 'Shield Temp',  val: latest?.shield_temp ?? null,     unit: 'K',    decimals: 1, warn: () => false,            caution: () => false },
+              { label: 'Compressor',   val: latest?.compressor ?? null,      unit: 'PSI',  decimals: 0, warn: () => false,            caution: () => false },
+              { label: 'Cold Head',    val: latest?.coldhead_temp_k ?? null, unit: 'K',    decimals: 1, warn: () => false,            caution: () => false },
+              { label: 'CS1',          val: latest?.cs1 ?? null,             unit: '',     decimals: 2, warn: () => false,            caution: () => false },
+            ].map(m => {
+              const color = m.val == null ? 'var(--text-muted)' : m.warn(m.val) ? 'var(--red)' : m.caution(m.val) ? 'var(--yellow)' : 'var(--green)'
+              return (
+                <div key={m.label} className="card">
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color }}>{m.val != null ? m.val.toFixed(m.decimals) : '—'}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{m.unit || ' '}</div>
+                </div>
+              )
+            })}
           </div>
 
           {/* Per-metric trends — one chart per measurable on its own y-axis,
