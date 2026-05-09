@@ -8,7 +8,10 @@ import type { Asset } from '../lib/types'
 import { naturalCompare, usePersistedState, statusOrder } from '../lib/listControls'
 
 type SortKey = 'name' | 'helium' | 'status' | 'site'
-type StatusFilter = 'all' | 'online' | 'offline' | 'warning' | 'critical'
+// 'reporting' = any asset with fresh telemetry (online/warning/critical combined).
+// 'online' is reserved for "online and healthy" if you ever want it back, but
+// the Online KPI tile filters by 'reporting' so the count matches "alive gateways".
+type StatusFilter = 'all' | 'reporting' | 'online' | 'offline' | 'warning' | 'critical'
 
 function heClass(v: number | null) {
   if (v == null) return 'level-crit'
@@ -179,7 +182,12 @@ export default function Dashboard() {
         a.site?.city?.toLowerCase().includes(q)
       )
     }
-    if (statusFilter !== 'all') list = list.filter(a => a.status === statusFilter)
+    if (statusFilter === 'reporting') {
+      // Any alive gateway: online OR warning OR critical (i.e. not offline)
+      list = list.filter(a => a.status !== 'offline')
+    } else if (statusFilter !== 'all') {
+      list = list.filter(a => a.status === statusFilter)
+    }
     if (siteFilter !== 'all') list = list.filter(a => a.site?.name === siteFilter)
     list.sort((a, b) => {
       let result = 0
@@ -201,11 +209,14 @@ export default function Dashboard() {
   }, [assets, search, statusFilter, siteFilter, sortKey, sortAsc])
 
   const kpi = useMemo(() => {
-    const online = assets.filter(a => a.status === 'online').length
-    const warning = assets.filter(a => a.status === 'warning').length
-    const critical = assets.filter(a => a.status === 'critical').length
-    const offline = assets.filter(a => a.status === 'offline').length
-    return { total: assets.length, online, warning, critical, offline }
+    // "Online" KPI counts any reporting gateway (online + warning + critical),
+    // matching the user's mental model of "machines on and reporting".
+    // Warning/Critical are sub-categories so their counts overlap with Online.
+    const reporting = assets.filter(a => a.status !== 'offline').length
+    const warning   = assets.filter(a => a.status === 'warning').length
+    const critical  = assets.filter(a => a.status === 'critical').length
+    const offline   = assets.filter(a => a.status === 'offline').length
+    return { total: assets.length, reporting, warning, critical, offline }
   }, [assets])
 
   function toggleSort(k: SortKey) {
@@ -241,28 +252,37 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* KPI row */}
+      {/* KPI row — every tile is a filter. Click a tile to scope the grid below; click again
+          (or click Total Assets) to clear. The active tile gets a colored border + glow. */}
       <div className="kpi-grid">
-        <div className="kpi-card">
-          <div className="kpi-label">Total Assets</div>
-          <div className="kpi-value" style={{ color: 'var(--text-primary)' }}>{kpi.total}</div>
-        </div>
-        <div className="kpi-card" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter(statusFilter === 'online' ? 'all' : 'online')}>
-          <div className="kpi-label">Online</div>
-          <div className="kpi-value" style={{ color: 'var(--green)' }}>{kpi.online}</div>
-        </div>
-        <div className="kpi-card" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter(statusFilter === 'warning' ? 'all' : 'warning')}>
-          <div className="kpi-label">Warning</div>
-          <div className="kpi-value" style={{ color: 'var(--yellow)' }}>{kpi.warning}</div>
-        </div>
-        <div className="kpi-card" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter(statusFilter === 'critical' ? 'all' : 'critical')}>
-          <div className="kpi-label">Critical</div>
-          <div className="kpi-value" style={{ color: 'var(--red)' }}>{kpi.critical}</div>
-        </div>
-        <div className="kpi-card" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline')}>
-          <div className="kpi-label">Offline</div>
-          <div className="kpi-value" style={{ color: 'var(--text-muted)' }}>{kpi.offline}</div>
-        </div>
+        {([
+          { key: 'all',       label: 'Total Assets', color: 'var(--text-primary)', count: kpi.total },
+          { key: 'reporting', label: 'Online',       color: 'var(--green)',        count: kpi.reporting },
+          { key: 'warning',   label: 'Warning',      color: 'var(--yellow)',       count: kpi.warning },
+          { key: 'critical',  label: 'Critical',     color: 'var(--red)',          count: kpi.critical },
+          { key: 'offline',   label: 'Offline',      color: 'var(--text-muted)',   count: kpi.offline },
+        ] as Array<{ key: StatusFilter; label: string; color: string; count: number }>).map(tile => {
+          const active = statusFilter === tile.key
+          return (
+            <div
+              key={tile.key}
+              className="kpi-card"
+              role="button"
+              tabIndex={0}
+              onClick={() => setStatusFilter(active ? 'all' : tile.key)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setStatusFilter(active ? 'all' : tile.key) } }}
+              style={{
+                cursor: 'pointer',
+                borderColor: active ? tile.color : undefined,
+                boxShadow: active ? `0 0 0 1px ${tile.color}, 0 0 14px -4px ${tile.color}` : undefined,
+                transition: 'border-color 0.12s, box-shadow 0.12s',
+              }}
+            >
+              <div className="kpi-label" style={{ color: active ? tile.color : undefined }}>{tile.label}</div>
+              <div className="kpi-value" style={{ color: tile.color }}>{tile.count}</div>
+            </div>
+          )
+        })}
       </div>
 
       {/* Filter bar */}
@@ -273,7 +293,7 @@ export default function Dashboard() {
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as StatusFilter)}>
           <option value="all">All Status</option>
-          <option value="online">Online</option>
+          <option value="reporting">Online (any reporting)</option>
           <option value="warning">Warning</option>
           <option value="critical">Critical</option>
           <option value="offline">Offline</option>
