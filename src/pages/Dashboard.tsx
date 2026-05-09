@@ -71,45 +71,61 @@ export default function Dashboard() {
     setLoading(true)
 
     try {
-      const { data: assetData, error: assetErr } = await supabase
-        .from('assets')
-        .select('id, name, model, serial, magmon_ip, site_id, company_id, gateway_id, site:sites(id, name, city, state, company_id)')
-        .eq('company_id', selectedCompany.id)
-        .order('name')
+      // One RPC = assets + sites + latest telemetry, all server-side, single round trip.
+      // Uses LATERAL+LIMIT 1 internally to take the (asset_id, ts DESC) index.
+      const { data, error } = await supabase.rpc('get_company_dashboard', {
+        p_company_id: selectedCompany.id,
+      })
 
-      if (assetErr || !assetData) return
+      // Don't blank the grid on transient failure if we already have a snapshot.
+      if (error) return
+      if (!data) return
 
-      const ids = assetData.map((a: any) => a.id)
-      const { data: telData, error: telErr } = await supabase
-        .from('v_asset_latest_normalized')
-        .select('asset_id, helium_level, flow, chiller_temp, shield_temp, he_pressure, compressor, cs1, coldhead_temp_k, ts')
-        .in('asset_id', ids)
+      type DashRow = {
+        asset_id: string; name: string; model: string | null; serial: string | null
+        magmon_ip: string | null; site_id: string | null; gateway_id: string | null
+        company_id: string | null; site_name: string | null; site_city: string | null
+        site_state: string | null; latest_ts: number | string | null
+        helium_level: number | string | null; he_pressure: number | string | null
+        water_flow: number | string | null; chiller_temp: number | string | null
+        shield_temp: number | string | null
+      }
 
-      // If the latest-telemetry query failed AND we already have a snapshot,
-      // keep showing the previous data rather than blanking everything to "offline".
-      if (telErr && assets.length > 0) return
-
-      const telMap: Record<string, any> = {}
-      telData?.forEach((t: any) => { telMap[t.asset_id] = t })
-
-      const enriched: Asset[] = assetData.map((a: any) => {
-        const tel = telMap[a.id] ?? null
-        const asset: Asset = {
-          ...a,
-          site: Array.isArray(a.site) ? a.site[0] ?? null : a.site,
-          telemetry: tel ? {
-            asset_id: tel.asset_id,
-            helium_level: tel.helium_level,
-            water_flow: tel.flow,
-            chiller_temp: tel.chiller_temp,
-            shield_temp: tel.shield_temp,
-            he_pressure: tel.he_pressure,
-            compressor: tel.compressor,
-            cs1: tel.cs1,
-            coldhead_temp_k: tel.coldhead_temp_k,
-            sampled_at: tel.ts,
+      const enriched: Asset[] = (data as DashRow[]).map(row => {
+        const tsNum = row.latest_ts == null
+          ? null
+          : (typeof row.latest_ts === 'number' ? row.latest_ts : Number(row.latest_ts))
+        const num = (v: number | string | null) =>
+          v == null ? null : (typeof v === 'number' ? v : Number(v))
+        const asset = {
+          id: row.asset_id,
+          name: row.name,
+          model: row.model,
+          serial: row.serial,
+          magmon_ip: row.magmon_ip,
+          site_id: row.site_id,
+          company_id: row.company_id,
+          gateway_id: row.gateway_id,
+          site: row.site_name ? {
+            id: row.site_id ?? '',
+            name: row.site_name,
+            city: row.site_city,
+            state: row.site_state,
+            company_id: row.company_id ?? '',
           } : null,
-        }
+          telemetry: tsNum != null ? {
+            asset_id: row.asset_id,
+            helium_level: num(row.helium_level),
+            water_flow:   num(row.water_flow),
+            chiller_temp: num(row.chiller_temp),
+            shield_temp:  num(row.shield_temp),
+            he_pressure:  num(row.he_pressure),
+            compressor: null,
+            cs1: null,
+            coldhead_temp_k: null,
+            sampled_at: tsNum as unknown as string,  // assetStatus reads it as ms-since-epoch
+          } : null,
+        } as Asset
         return { ...asset, status: assetStatus(asset) }
       })
 
