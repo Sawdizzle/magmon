@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase'
 import type { Asset, Site } from '../lib/types'
 
 interface TelRow {
-  sampled_at: string
+  ts: number
   helium_level: number | null
   water_flow: number | null
   chiller_temp: number | null
@@ -14,11 +14,56 @@ interface TelRow {
   shield_temp: number | null
 }
 
+interface LatestSnapshot {
+  ts: number | null
+  helium_level: number | null
+  water_flow: number | null
+  chiller_temp: number | null
+  he_pressure: number | null
+  shield_temp: number | null
+}
+
+const HISTORY_RANGES_HOURS = [24, 24 * 7, 24 * 30] as const
+
+function pickNum(v: Record<string, unknown> | null, ...keys: string[]): number | null {
+  if (!v) return null
+  for (const k of keys) {
+    const val = v[k]
+    if (typeof val === 'number') return val
+  }
+  return null
+}
+
+function formatRelative(ts: number | null): string {
+  if (ts == null) return 'Never reported'
+  const ago = Date.now() - ts
+  if (ago < 60_000) return 'just now'
+  if (ago < 3_600_000) return `${Math.floor(ago / 60_000)}m ago`
+  if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)}h ago`
+  return `${Math.floor(ago / 86_400_000)}d ago`
+}
+
+function freshnessTone(ts: number | null): string {
+  if (ts == null) return 'var(--text-muted)'
+  const ago = Date.now() - ts
+  if (ago < 5 * 60_000) return 'var(--green)'
+  if (ago < 60 * 60_000) return 'var(--yellow)'
+  return 'var(--red)'
+}
+
+function rangeLabel(hours: number): string {
+  if (hours <= 24) return '24-hour'
+  if (hours <= 24 * 7) return '7-day'
+  return '30-day'
+}
+
 export default function AssetDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [asset, setAsset] = useState<Asset | null>(null)
+  const [latest, setLatest] = useState<LatestSnapshot | null>(null)
   const [telemetry, setTelemetry] = useState<TelRow[]>([])
+  const [historyHours, setHistoryHours] = useState<number>(24)
   const [sites, setSites] = useState<Site[]>([])
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<Partial<Asset>>({})
@@ -32,7 +77,7 @@ export default function AssetDetail() {
 
   async function loadAll() {
     setLoading(true)
-    await Promise.all([loadAsset(), loadTelemetry(), loadSites()])
+    await Promise.all([loadAsset(), loadLatest(), loadHistory(), loadSites()])
     setLoading(false)
   }
 
@@ -42,18 +87,77 @@ export default function AssetDetail() {
       .select('*, site:sites(*)')
       .eq('id', id)
       .single()
-    if (data) { setAsset(data); setForm({ name: data.name, serial: data.serial, model: data.model, site_id: data.site_id, magmon_ip: data.magmon_ip }) }
+    if (data) {
+      setAsset(data)
+      setForm({ name: data.name, serial: data.serial, model: data.model, site_id: data.site_id, magmon_ip: data.magmon_ip })
+    }
   }
 
-  async function loadTelemetry() {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  /** Always pull the most recent sample regardless of age, so the metric
+   * cards show real values (with a freshness badge) even for stale assets. */
+  async function loadLatest() {
+    if (!id) return
     const { data } = await supabase
       .from('telemetry_samples')
-      .select('sampled_at, helium_level, water_flow, chiller_temp, he_pressure, shield_temp')
+      .select('ts, values')
       .eq('asset_id', id)
-      .gte('sampled_at', since)
-      .order('sampled_at', { ascending: true })
-    if (data) setTelemetry(data)
+      .order('ts', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (data) {
+      const v = (data as { ts: number | string; values: Record<string, unknown> | null }).values
+      const tsNum = typeof data.ts === 'number' ? data.ts : Number(data.ts)
+      setLatest({
+        ts: tsNum,
+        helium_level: pickNum(v, 'helium_level', 'he_level', 'helium_level_pct'),
+        water_flow:   pickNum(v, 'flow', 'water_flow', 'compressor_helium_flow_g_min'),
+        chiller_temp: pickNum(v, 'chiller_temp', 'room_temp_c'),
+        he_pressure:  pickNum(v, 'he_pressure', 'magnet_pressure_mbar'),
+        shield_temp:  pickNum(v, 'shield_temp', 'shield_temp_k', 'shield'),
+      })
+    } else {
+      setLatest(null)
+    }
+  }
+
+  /** Bucketed history via server-side RPC. Tries 24h → 7d → 30d, stopping at
+   * the first window that has any data. */
+  async function loadHistory() {
+    if (!id) return
+    for (const hours of HISTORY_RANGES_HOURS) {
+      const sinceMs = Date.now() - hours * 60 * 60 * 1000
+      // Keep buckets to ~300 points: 5min for 24h, 30min for 7d, 2h for 30d
+      const bucketSecs = hours <= 24 ? 300 : hours <= 24 * 7 ? 1800 : 7200
+      const { data, error } = await supabase.rpc('get_asset_telemetry_buckets', {
+        p_asset_id: id,
+        p_since_ms: sinceMs,
+        p_bucket_seconds: bucketSecs,
+        p_max_buckets: 500,
+      })
+      if (error) continue
+      if (data && data.length > 0) {
+        const rows: TelRow[] = (data as Array<{
+          bucket_ts: number | string
+          helium_level: number | string | null
+          he_pressure:  number | string | null
+          water_flow:   number | string | null
+          chiller_temp: number | string | null
+          shield_temp:  number | string | null
+        }>).map(row => ({
+          ts:           typeof row.bucket_ts === 'number' ? row.bucket_ts : Number(row.bucket_ts),
+          helium_level: row.helium_level == null ? null : Number(row.helium_level),
+          water_flow:   row.water_flow   == null ? null : Number(row.water_flow),
+          chiller_temp: row.chiller_temp == null ? null : Number(row.chiller_temp),
+          he_pressure:  row.he_pressure  == null ? null : Number(row.he_pressure),
+          shield_temp:  row.shield_temp  == null ? null : Number(row.shield_temp),
+        }))
+        setTelemetry(rows)
+        setHistoryHours(hours)
+        return
+      }
+    }
+    setTelemetry([])
+    setHistoryHours(24)
   }
 
   async function loadSites() {
@@ -77,7 +181,9 @@ export default function AssetDetail() {
   }
 
   const chartData = telemetry.map(t => ({
-    time: new Date(t.sampled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    time: new Date(t.ts).toLocaleString([], historyHours > 24
+      ? { month: 'short', day: 'numeric', hour: '2-digit' }
+      : { hour: '2-digit', minute: '2-digit' }),
     'He Level': t.helium_level,
     'Flow': t.water_flow,
     'Chiller': t.chiller_temp,
@@ -86,8 +192,6 @@ export default function AssetDetail() {
 
   if (loading) return <div className="empty-state">Loading…</div>
   if (!asset) return <div className="empty-state">Asset not found</div>
-
-  const latest = telemetry[telemetry.length - 1]
 
   return (
     <div className="page">
@@ -98,7 +202,17 @@ export default function AssetDetail() {
         </button>
         <div style={{ flex: 1 }}>
           <div className="page-title">{asset.name}</div>
-          <div className="page-subtitle">{asset.site?.name} · {asset.site?.city}, {asset.site?.state}</div>
+          <div className="page-subtitle" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span>
+              {asset.site?.name ?? 'Unassigned'}
+              {asset.site?.city ? ` · ${asset.site.city}` : ''}
+              {asset.site?.state ? `, ${asset.site.state}` : ''}
+            </span>
+            <span style={{ color: 'var(--text-muted)' }}>•</span>
+            <span style={{ color: freshnessTone(latest?.ts ?? null), fontWeight: 600 }}>
+              {latest?.ts ? `Last seen ${formatRelative(latest.ts)}` : 'Never reported'}
+            </span>
+          </div>
         </div>
         {!editing ? (
           <button className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => setEditing(true)}>
@@ -117,13 +231,13 @@ export default function AssetDetail() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 18 }}>
         {/* Left: chart + metrics */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Latest metrics */}
+          {/* Latest metrics — show whatever the most-recent values were, even if stale */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
             {[
-              { label: 'Helium Level', val: latest?.helium_level, unit: '%', warn: (v: number) => v < 60, caution: (v: number) => v < 75 },
-              { label: 'Water Flow', val: latest?.water_flow, unit: 'L/min', warn: (v: number) => v < 0.6, caution: () => false },
-              { label: 'Chiller Temp', val: latest?.chiller_temp, unit: '°C', warn: (v: number) => v > 75, caution: () => false },
-              { label: 'He Pressure', val: latest?.he_pressure, unit: 'mbar', warn: (v: number) => v > 3, caution: () => false },
+              { label: 'Helium Level', val: latest?.helium_level ?? null, unit: '%', warn: (v: number) => v < 60, caution: (v: number) => v < 75 },
+              { label: 'Water Flow', val: latest?.water_flow ?? null, unit: 'L/min', warn: (v: number) => v < 0.6, caution: () => false },
+              { label: 'Chiller Temp', val: latest?.chiller_temp ?? null, unit: '°C', warn: (v: number) => v > 75, caution: () => false },
+              { label: 'He Pressure', val: latest?.he_pressure ?? null, unit: 'mbar', warn: (v: number) => v > 3, caution: () => false },
             ].map(m => {
               const color = m.val == null ? 'var(--text-muted)' : m.warn(m.val) ? 'var(--red)' : m.caution(m.val) ? 'var(--yellow)' : 'var(--green)'
               return (
@@ -136,9 +250,16 @@ export default function AssetDetail() {
             })}
           </div>
 
-          {/* Chart */}
+          {/* Chart — auto-widens to 7d / 30d if 24h is empty */}
           <div className="card" style={{ padding: '16px' }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>24-Hour Telemetry History</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{rangeLabel(historyHours)} Telemetry History</div>
+              {chartData.length > 1 && historyHours > 24 && (
+                <div style={{ fontSize: 11, color: 'var(--yellow)' }}>
+                  No data in last 24 hours — showing {rangeLabel(historyHours).toLowerCase()} window
+                </div>
+              )}
+            </div>
             {chartData.length > 1 ? (
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
@@ -147,14 +268,18 @@ export default function AssetDetail() {
                   <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }} />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-                  <Line type="monotone" dataKey="He Level" stroke="#22d3a0" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                  <Line type="monotone" dataKey="Flow" stroke="#00c8dc" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                  <Line type="monotone" dataKey="Chiller" stroke="#f0b429" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                  <Line type="monotone" dataKey="He Press" stroke="#f05252" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="He Level" stroke="#22d3a0" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="Flow" stroke="#00c8dc" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="Chiller" stroke="#f0b429" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="He Press" stroke="#f05252" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
                 </LineChart>
               </ResponsiveContainer>
             ) : (
-              <div className="empty-state" style={{ padding: 40 }}>No telemetry data for the past 24 hours</div>
+              <div className="empty-state" style={{ padding: 40 }}>
+                {latest?.ts
+                  ? `Latest sample is from ${formatRelative(latest.ts)} — no data in the last 30 days`
+                  : 'This asset has never reported telemetry'}
+              </div>
             )}
           </div>
         </div>

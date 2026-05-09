@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { LineChart, Line, ResponsiveContainer, Tooltip, YAxis } from 'recharts'
 import { Search, SortAsc, SortDesc, WifiOff } from 'lucide-react'
@@ -42,86 +42,109 @@ export default function Dashboard() {
   const [sortKey, setSortKey] = usePersistedState<SortKey>('dash.sortKey', 'name')
   const [sortAsc, setSortAsc] = usePersistedState<boolean>('dash.sortAsc', true)
 
+  // Live-data plumbing: poll while visible, refetch immediately on focus,
+  // never overwrite the grid with an empty/offline snapshot if a single
+  // fetch fails transiently.
+  const inFlightRef = useRef(false)
+  const [lastUpdateMs, setLastUpdateMs] = useState<number | null>(null)
+
   useEffect(() => {
     if (!selectedCompany) return
     loadAssets()
-    const iv = setInterval(loadAssets, 30000)
-    return () => clearInterval(iv)
+    const iv = setInterval(() => {
+      if (document.visibilityState === 'visible') loadAssets()
+    }, 20000)
+    const onVisible = () => { if (document.visibilityState === 'visible') loadAssets() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      clearInterval(iv)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
   }, [selectedCompany])
 
   async function loadAssets() {
     if (!selectedCompany) return
+    if (inFlightRef.current) return
+    inFlightRef.current = true
     setLoading(true)
 
-    // Step 1: assets + sites
-    const { data: assetData } = await supabase
-      .from('assets')
-      .select('id, name, model, serial, magmon_ip, site_id, company_id, gateway_id, site:sites(id, name, city, state, company_id)')
-      .eq('company_id', selectedCompany.id)
-      .order('name')
+    try {
+      const { data: assetData, error: assetErr } = await supabase
+        .from('assets')
+        .select('id, name, model, serial, magmon_ip, site_id, company_id, gateway_id, site:sites(id, name, city, state, company_id)')
+        .eq('company_id', selectedCompany.id)
+        .order('name')
 
-    if (!assetData) { setLoading(false); return }
+      if (assetErr || !assetData) return
 
-    // Step 2: latest telemetry via view (correct column names: flow, ts)
-    const ids = assetData.map((a: any) => a.id)
-    const { data: telData } = await supabase
-      .from('v_asset_latest_normalized')
-      .select('asset_id, helium_level, flow, chiller_temp, shield_temp, he_pressure, compressor, cs1, coldhead_temp_k, ts')
-      .in('asset_id', ids)
+      const ids = assetData.map((a: any) => a.id)
+      const { data: telData, error: telErr } = await supabase
+        .from('v_asset_latest_normalized')
+        .select('asset_id, helium_level, flow, chiller_temp, shield_temp, he_pressure, compressor, cs1, coldhead_temp_k, ts')
+        .in('asset_id', ids)
 
-    const telMap: Record<string, any> = {}
-    telData?.forEach((t: any) => { telMap[t.asset_id] = t })
+      // If the latest-telemetry query failed AND we already have a snapshot,
+      // keep showing the previous data rather than blanking everything to "offline".
+      if (telErr && assets.length > 0) return
 
-    const enriched: Asset[] = assetData.map((a: any) => {
-      const tel = telMap[a.id] ?? null
-      const asset: Asset = {
-        ...a,
-        site: Array.isArray(a.site) ? a.site[0] ?? null : a.site,
-        telemetry: tel ? {
-          asset_id: tel.asset_id,
-          helium_level: tel.helium_level,
-          water_flow: tel.flow,
-          chiller_temp: tel.chiller_temp,
-          shield_temp: tel.shield_temp,
-          he_pressure: tel.he_pressure,
-          compressor: tel.compressor,
-          cs1: tel.cs1,
-          coldhead_temp_k: tel.coldhead_temp_k,
-          sampled_at: tel.ts,
-        } : null,
-      }
-      return { ...asset, status: assetStatus(asset) }
-    })
+      const telMap: Record<string, any> = {}
+      telData?.forEach((t: any) => { telMap[t.asset_id] = t })
 
-    setAssets(enriched)
-    loadSparklines(ids)
-    setLoading(false)
+      const enriched: Asset[] = assetData.map((a: any) => {
+        const tel = telMap[a.id] ?? null
+        const asset: Asset = {
+          ...a,
+          site: Array.isArray(a.site) ? a.site[0] ?? null : a.site,
+          telemetry: tel ? {
+            asset_id: tel.asset_id,
+            helium_level: tel.helium_level,
+            water_flow: tel.flow,
+            chiller_temp: tel.chiller_temp,
+            shield_temp: tel.shield_temp,
+            he_pressure: tel.he_pressure,
+            compressor: tel.compressor,
+            cs1: tel.cs1,
+            coldhead_temp_k: tel.coldhead_temp_k,
+            sampled_at: tel.ts,
+          } : null,
+        }
+        return { ...asset, status: assetStatus(asset) }
+      })
+
+      setAssets(enriched)
+      setLastUpdateMs(Date.now())
+      loadSparklines()
+    } finally {
+      inFlightRef.current = false
+      setLoading(false)
+    }
   }
 
-  async function loadSparklines(ids: string[]) {
-    if (ids.length === 0) return
+  /**
+   * Bucketed sparklines via server-side RPC. Browser receives ~60 numeric
+   * points per asset over 2h instead of thousands of raw JSONB rows.
+   */
+  async function loadSparklines() {
+    if (!selectedCompany) return
     const sinceMs = Date.now() - 2 * 60 * 60 * 1000
-    const { data } = await supabase
-      .from('telemetry_samples')
-      .select('asset_id, ts, values')
-      .in('asset_id', ids)
-      .gte('ts', sinceMs)
-      .order('ts', { ascending: true })
-    if (data) {
-      const map: Record<string, SparkData[]> = {}
-      for (const row of data as Array<{ asset_id: string; ts: number; values: Record<string, number | null> | null }>) {
-        if (!map[row.asset_id]) map[row.asset_id] = []
-        const v = row.values ?? {}
-        const he = v.helium_level ?? v.he_level ?? null
-        const pressure = v.he_pressure ?? v.magnet_pressure_mbar ?? null
-        map[row.asset_id].push({
-          t: typeof row.ts === 'number' ? row.ts : Number(row.ts),
-          he: typeof he === 'number' ? he : null,
-          pressure: typeof pressure === 'number' ? pressure : null,
-        })
-      }
-      setSparks(map)
+    const { data, error } = await supabase.rpc('get_company_sparklines', {
+      p_company_id: selectedCompany.id,
+      p_since_ms: sinceMs,
+      p_bucket_seconds: 120,
+      p_max_buckets_per_asset: 60,
+    })
+    if (error || !data) return
+    const map: Record<string, SparkData[]> = {}
+    for (const row of data as Array<{ asset_id: string; bucket_ts: number | string; helium_level: number | string | null; he_pressure: number | string | null }>) {
+      const t = typeof row.bucket_ts === 'number' ? row.bucket_ts : Number(row.bucket_ts)
+      const he = row.helium_level == null ? null : Number(row.helium_level)
+      const pressure = row.he_pressure == null ? null : Number(row.he_pressure)
+      if (!map[row.asset_id]) map[row.asset_id] = []
+      map[row.asset_id].push({ t, he, pressure })
     }
+    setSparks(map)
   }
 
   const sites = useMemo(() => {
@@ -181,9 +204,25 @@ export default function Dashboard() {
       <div className="page-header">
         <div>
           <div className="page-title">Fleet Overview</div>
-          <div className="page-subtitle">{assets.length} assets · last refreshed just now</div>
+          <div className="page-subtitle" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span>{assets.length} assets</span>
+            {lastUpdateMs && (
+              <>
+                <span style={{ color: 'var(--text-muted)' }}>·</span>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  color: (Date.now() - lastUpdateMs) < 90_000 ? 'var(--green)' : 'var(--yellow)',
+                }}>
+                  <span className={(Date.now() - lastUpdateMs) < 90_000 ? 'dot dot-online' : 'dot dot-warning'} />
+                  {(Date.now() - lastUpdateMs) < 5_000 ? 'live' : `updated ${Math.floor((Date.now() - lastUpdateMs) / 1000)}s ago`}
+                </span>
+              </>
+            )}
+          </div>
         </div>
-        <button className="btn-ghost" onClick={loadAssets} style={{ fontSize: 12 }}>↻ Refresh</button>
+        <button className="btn-ghost" onClick={loadAssets} style={{ fontSize: 12 }} disabled={loading}>
+          {loading ? '⟳ Refreshing…' : '↻ Refresh'}
+        </button>
       </div>
 
       {/* KPI row */}
@@ -242,8 +281,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Asset grid */}
-      {loading ? (
+      {/* Asset grid — only show "Loading" on first paint; subsequent refreshes update in place */}
+      {loading && assets.length === 0 ? (
         <div className="empty-state">Loading assets…</div>
       ) : filtered.length === 0 ? (
         <div className="empty-state">

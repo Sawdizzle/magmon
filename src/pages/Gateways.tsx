@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../lib/context'
-import { ArrowUpDown, Search } from 'lucide-react'
+import { ArrowUpDown, Search, Plus, X, Copy, Check } from 'lucide-react'
 import { naturalCompare, usePersistedState, statusOrder } from '../lib/listControls'
 
 interface GW {
@@ -12,6 +12,16 @@ interface GW {
   last_heartbeat: number | null
   site_name: string | null
   asset_count: number
+}
+
+interface SiteOption { id: string; name: string }
+
+interface CreatedGateway {
+  gateway_id: string
+  hostname: string
+  site_id: string
+  company_id: string
+  token: string
 }
 
 type SortKey = 'hostname' | 'status' | 'site' | 'heartbeat' | 'assets'
@@ -36,9 +46,20 @@ function gwStatus(g: { last_heartbeat: number | null }): 'online' | 'offline' | 
 export default function Gateways() {
   const { selectedCompany } = useApp()
   const [gateways, setGateways] = useState<GW[]>([])
+  const [siteOpts, setSiteOpts] = useState<SiteOption[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Persisted UI prefs
+  // Create-gateway state
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState<{ hostname: string; site_id: string; kind: 'pi' | 'pc'; ip_address: string }>({
+    hostname: '', site_id: '', kind: 'pi', ip_address: ''
+  })
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [created, setCreated] = useState<CreatedGateway | null>(null)
+  const [tokenCopied, setTokenCopied] = useState(false)
+
+  // Persisted filter/sort prefs
   const [sortKey, setSortKey] = usePersistedState<SortKey>('gw.sortKey', 'hostname')
   const [sortAsc, setSortAsc] = usePersistedState<boolean>('gw.sortAsc', true)
   const [search, setSearch] = usePersistedState<string>('gw.search', '')
@@ -66,6 +87,9 @@ export default function Gateways() {
     const { data: sites } = await supabase
       .from('sites')
       .select('id, name')
+      .eq('company_id', selectedCompany.id)
+      .order('name')
+    if (sites) setSiteOpts(sites as SiteOption[])
     if (gws) {
       const siteMap: Record<string, string> = {}
       sites?.forEach((s: { id: string; name: string }) => { siteMap[s.id] = s.name })
@@ -83,13 +107,55 @@ export default function Gateways() {
     setLoading(false)
   }
 
+  async function handleCreate() {
+    if (!selectedCompany) return
+    setCreateError(null)
+    if (!form.hostname.trim()) { setCreateError('Hostname is required'); return }
+    if (!form.site_id) { setCreateError('Pick a site'); return }
+
+    setCreating(true)
+    const { data, error } = await supabase.rpc('admin_create_gateway', {
+      p_company_id: selectedCompany.id,
+      p_site_id: form.site_id,
+      p_hostname: form.hostname.trim(),
+      p_kind: form.kind,
+      p_ip_address: form.ip_address.trim(),
+      p_offline_timeout_sec: 120,
+    })
+    setCreating(false)
+
+    if (error) {
+      setCreateError(error.message)
+      return
+    }
+    // RPC returns a table, supabase-js returns it as an array
+    const row = Array.isArray(data) ? data[0] : data
+    if (row) {
+      setCreated(row as CreatedGateway)
+      setAdding(false)
+      setForm({ hostname: '', site_id: '', kind: 'pi', ip_address: '' })
+      load()  // refresh list
+    }
+  }
+
+  async function copyToken() {
+    if (!created) return
+    try {
+      await navigator.clipboard.writeText(created.token)
+      setTokenCopied(true)
+      setTimeout(() => setTokenCopied(false), 1500)
+    } catch {
+      /* clipboard unavailable, just leave token visible */
+    }
+  }
+
   function toggleSort(k: SortKey) {
     if (sortKey === k) setSortAsc(v => !v)
     else { setSortKey(k); setSortAsc(true) }
   }
 
   // Distinct sites that appear in this gateway list, for the filter dropdown
-  const siteOptions = useMemo(() => {
+  const siteFilterOpts = useMemo(() => {
     const s = new Set<string>()
     gateways.forEach(g => { if (g.site_name) s.add(g.site_name) })
     return Array.from(s).sort((a, b) => naturalCompare(a, b))
@@ -159,8 +225,103 @@ export default function Gateways() {
             {filtersActive && ` · showing ${filtered.length}`}
           </div>
         </div>
-        <button className="btn-ghost" onClick={load} style={{ fontSize: 12 }}>↻ Refresh</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn-ghost" onClick={load} style={{ fontSize: 12 }}>↻ Refresh</button>
+          <button
+            className="btn-primary"
+            onClick={() => { setAdding(v => !v); setCreateError(null) }}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+          >
+            <Plus size={14} /> New Gateway
+          </button>
+        </div>
       </div>
+
+      {/* Token banner — appears after a successful create. Persists until user dismisses. */}
+      {created && (
+        <div className="card" style={{ borderColor: 'var(--green)', background: 'rgba(52,211,153,0.06)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)', marginBottom: 4 }}>
+                Gateway created: {created.hostname}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                Copy this token now — it's the only time you'll see it. Configure your gateway agent to authenticate with it.
+              </div>
+              <div style={{
+                fontFamily: 'monospace', fontSize: 12,
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border)',
+                padding: '8px 12px',
+                borderRadius: 'var(--radius)',
+                wordBreak: 'break-all',
+              }}>
+                {created.token}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+                Gateway ID: <span style={{ fontFamily: 'monospace' }}>{created.gateway_id}</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button className="btn-ghost" onClick={copyToken} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
+                {tokenCopied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy</>}
+              </button>
+              <button className="btn-ghost" onClick={() => setCreated(null)} style={{ padding: 6 }} aria-label="Dismiss">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New-gateway form */}
+      {adding && (
+        <div className="card">
+          <div style={{ fontWeight: 600, marginBottom: 14, fontSize: 14 }}>New Gateway</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 12 }}>
+            <div className="form-group">
+              <label>Hostname *</label>
+              <input
+                value={form.hostname}
+                onChange={e => setForm(f => ({ ...f, hostname: e.target.value }))}
+                placeholder="e.g. nm1042-pi"
+                autoFocus
+              />
+            </div>
+            <div className="form-group">
+              <label>Site *</label>
+              <select value={form.site_id} onChange={e => setForm(f => ({ ...f, site_id: e.target.value }))}>
+                <option value="">— pick a site —</option>
+                {siteOpts.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Kind</label>
+              <select value={form.kind} onChange={e => setForm(f => ({ ...f, kind: e.target.value as 'pi' | 'pc' }))}>
+                <option value="pi">Raspberry Pi</option>
+                <option value="pc">PC</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>IP address (optional)</label>
+              <input
+                value={form.ip_address}
+                onChange={e => setForm(f => ({ ...f, ip_address: e.target.value }))}
+                placeholder="192.168.x.x"
+              />
+            </div>
+          </div>
+          {createError && (
+            <div style={{ color: 'var(--red)', fontSize: 12, marginBottom: 10 }}>{createError}</div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn-primary" onClick={handleCreate} disabled={creating}>
+              {creating ? 'Creating…' : 'Create Gateway'}
+            </button>
+            <button className="btn-ghost" onClick={() => { setAdding(false); setCreateError(null) }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {/* KPI row */}
       <div className="kpi-grid">
@@ -201,7 +362,7 @@ export default function Gateways() {
         </select>
         <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)}>
           <option value="all">All Sites</option>
-          {siteOptions.map(s => <option key={s} value={s}>{s}</option>)}
+          {siteFilterOpts.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
         {filtersActive && (
           <button
@@ -227,11 +388,11 @@ export default function Gateways() {
             </tr>
           </thead>
           <tbody>
-            {loading ? (
+            {loading && gateways.length === 0 ? (
               <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>Loading…</td></tr>
             ) : filtered.length === 0 ? (
               <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-                {gateways.length === 0 ? 'No gateways found' : 'No gateways match your filters'}
+                {gateways.length === 0 ? 'No gateways yet — click "+ New Gateway" to register one' : 'No gateways match your filters'}
               </td></tr>
             ) : filtered.map(g => (
               <tr key={g.id}>
