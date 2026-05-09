@@ -250,10 +250,10 @@ export default function AssetDetail() {
             })}
           </div>
 
-          {/* Chart — auto-widens to 7d / 30d if 24h is empty */}
+          {/* Combined chart — all metrics overlaid on one axis. Auto-widens 24h -> 7d -> 30d. */}
           <div className="card" style={{ padding: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{rangeLabel(historyHours)} Telemetry History</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{rangeLabel(historyHours)} Telemetry History (all metrics)</div>
               {chartData.length > 1 && historyHours > 24 && (
                 <div style={{ fontSize: 11, color: 'var(--yellow)' }}>
                   No data in last 24 hours — showing {rangeLabel(historyHours).toLowerCase()} window
@@ -282,6 +282,46 @@ export default function AssetDetail() {
               </div>
             )}
           </div>
+
+          {/* Per-metric trends — one chart per measurable on its own y-axis,
+              so trends within each metric are easy to read regardless of the
+              other metrics' scales. */}
+          {chartData.length > 1 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+              {([
+                { key: 'He Level', label: 'Helium Level',  unit: '%',     color: '#22d3a0', precision: 1 },
+                { key: 'He Press', label: 'He Pressure',   unit: 'mbar',  color: '#f05252', precision: 2 },
+                { key: 'Flow',     label: 'Water Flow',    unit: 'L/min', color: '#00c8dc', precision: 2 },
+                { key: 'Chiller',  label: 'Chiller Temp',  unit: '°C',    color: '#f0b429', precision: 1 },
+                { key: 'Shield',   label: 'Shield Temp',   unit: 'K',     color: '#a78bfa', precision: 1 },
+              ] as Array<{ key: keyof typeof chartData[0]; label: string; unit: string; color: string; precision: number }>).map(m => {
+                // Filter to a slim {time, v} payload — keeps the chart isolated to its own metric.
+                const series = chartData.map(c => ({ time: c.time, v: c[m.key] }))
+                const hasData = series.some(p => p.v != null)
+                if (!hasData) return null
+                return (
+                  <div key={m.key} className="card" style={{ padding: '14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{m.label}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{m.unit}</div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={130}>
+                      <LineChart data={series} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,200,220,0.06)" />
+                        <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 9 }} tickLine={false} interval="preserveStartEnd" minTickGap={40} />
+                        <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 9 }} tickLine={false} axisLine={false} domain={['auto', 'auto']} width={42} />
+                        <Tooltip
+                          contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
+                          formatter={(value: number) => [`${value.toFixed(m.precision)} ${m.unit}`, m.label]}
+                        />
+                        <Line type="monotone" dataKey="v" stroke={m.color} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* Right: asset info / edit */}
