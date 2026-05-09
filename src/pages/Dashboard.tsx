@@ -91,7 +91,8 @@ export default function Dashboard() {
         site_state: string | null; latest_ts: number | string | null
         helium_level: number | string | null; he_pressure: number | string | null
         water_flow: number | string | null; chiller_temp: number | string | null
-        shield_temp: number | string | null
+        shield_temp: number | string | null; compressor: number | string | null
+        cs1: number | string | null; coldhead_temp_k: number | string | null
       }
 
       const enriched: Asset[] = (data as DashRow[]).map(row => {
@@ -118,14 +119,14 @@ export default function Dashboard() {
           } : null,
           telemetry: tsNum != null ? {
             asset_id: row.asset_id,
-            helium_level: num(row.helium_level),
-            water_flow:   num(row.water_flow),
-            chiller_temp: num(row.chiller_temp),
-            shield_temp:  num(row.shield_temp),
-            he_pressure:  num(row.he_pressure),
-            compressor: null,
-            cs1: null,
-            coldhead_temp_k: null,
+            helium_level:    num(row.helium_level),
+            water_flow:      num(row.water_flow),
+            chiller_temp:    num(row.chiller_temp),
+            shield_temp:     num(row.shield_temp),
+            he_pressure:     num(row.he_pressure),
+            compressor:      num(row.compressor),
+            cs1:             num(row.cs1),
+            coldhead_temp_k: num(row.coldhead_temp_k),
             sampled_at: tsNum as unknown as string,  // assetStatus reads it as ms-since-epoch
           } : null,
         } as Asset
@@ -328,15 +329,26 @@ export default function Dashboard() {
       ) : (
         <div className="asset-grid">
           {filtered.map(asset => {
-            const he = asset.telemetry?.helium_level ?? null
-            const flow = asset.telemetry?.water_flow ?? null
-            const temp = asset.telemetry?.chiller_temp ?? null
+            const tel = asset.telemetry
+            const he       = tel?.helium_level ?? null
+            const press    = tel?.he_pressure ?? null
+            const flow     = tel?.water_flow ?? null
+            const chiller  = tel?.chiller_temp ?? null
+            const shield   = tel?.shield_temp ?? null
+            const compr    = tel?.compressor ?? null
+            const coldhead = tel?.coldhead_temp_k ?? null
             const spark = sparks[asset.id] ?? []
             const status = asset.status ?? 'offline'
             const dotClass = status === 'online' ? 'dot-online' : status === 'warning' ? 'dot-warning' : status === 'critical' ? 'dot-offline' : 'dot-never'
 
+            const heLineColor = he != null && he < 60 ? '#f05252' : he != null && he < 75 ? '#f0b429' : '#22d3a0'
+            const heValueColor = he == null ? 'var(--text-muted)' : he < 60 ? 'var(--red)' : he < 75 ? 'var(--yellow)' : 'var(--green)'
+            const hasHeSpark    = spark.some(p => p.he != null)
+            const hasPressSpark = spark.some(p => p.pressure != null)
+
             return (
               <div key={asset.id} className={`asset-card status-${status}`} onClick={() => navigate(`/assets/${asset.id}`)}>
+                {/* Header */}
                 <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                     <div style={{ minWidth: 0 }}>
@@ -352,10 +364,11 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <div style={{ padding: '12px 16px 0' }}>
+                {/* KPI 1 — Helium Level: value + bar + own sparkline */}
+                <div style={{ padding: '12px 16px 6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Helium Level</span>
-                    <span style={{ fontSize: 18, fontWeight: 700, color: he == null ? 'var(--text-muted)' : he < 60 ? 'var(--red)' : he < 75 ? 'var(--yellow)' : 'var(--green)' }}>
+                    <span style={{ fontSize: 18, fontWeight: 700, color: heValueColor }}>
                       {he != null ? `${he.toFixed(1)}%` : '—'}
                     </span>
                   </div>
@@ -364,63 +377,69 @@ export default function Dashboard() {
                       <div className={`he-bar-fill ${heClass(he)}`} style={{ width: `${Math.min(he ?? 0, 100)}%` }} />
                     </div>
                   </div>
+                  <div style={{ height: 28, marginTop: 6 }}>
+                    {hasHeSpark && spark.length > 1 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={spark} margin={{ top: 2, bottom: 2, left: 0, right: 0 }}>
+                          <YAxis hide domain={['auto', 'auto']} />
+                          <Line type="monotone" dataKey="he" name="He Level" stroke={heLineColor} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                          <Tooltip
+                            contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
+                            formatter={(value: number) => [`${value.toFixed(1)}%`, 'He Level']}
+                            labelFormatter={() => ''}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : null}
+                  </div>
                 </div>
 
-                {spark.length > 1 ? (
-                  <div style={{ padding: '6px 8px 0', height: 56 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={spark} margin={{ top: 4, bottom: 4, left: 0, right: 0 }}>
-                        <YAxis yAxisId="he" hide domain={['auto', 'auto']} />
-                        <YAxis yAxisId="pressure" hide domain={['auto', 'auto']} />
-                        <Line
-                          yAxisId="he"
-                          name="He Level"
-                          type="monotone"
-                          dataKey="he"
-                          stroke={he != null && he < 60 ? '#f05252' : he != null && he < 75 ? '#f0b429' : '#22d3a0'}
-                          strokeWidth={1.5}
-                          dot={false}
-                          isAnimationActive={false}
-                          connectNulls
-                        />
-                        <Line
-                          yAxisId="pressure"
-                          name="He Press"
-                          type="monotone"
-                          dataKey="pressure"
-                          stroke="#00c8dc"
-                          strokeWidth={1.2}
-                          strokeDasharray="3 3"
-                          dot={false}
-                          isAnimationActive={false}
-                          connectNulls
-                        />
-                        <Tooltip
-                          contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
-                          formatter={(value: number, name: string) => {
-                            if (name === 'He Level') return [`${value.toFixed(1)}%`, name]
-                            if (name === 'He Press') return [value.toFixed(2), name]
-                            return [value, name]
-                          }}
-                          labelFormatter={() => ''}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
+                {/* KPI 2 — He Pressure: value + own sparkline */}
+                <div style={{ padding: '6px 16px 0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>He Pressure</span>
+                    <span style={{ fontSize: 18, fontWeight: 700, color: press == null ? 'var(--text-muted)' : 'var(--text-primary)' }}>
+                      {press != null ? press.toFixed(2) : '—'}
+                    </span>
                   </div>
-                ) : <div style={{ height: 56 }} />}
+                  <div style={{ height: 28 }}>
+                    {hasPressSpark && spark.length > 1 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={spark} margin={{ top: 2, bottom: 2, left: 0, right: 0 }}>
+                          <YAxis hide domain={['auto', 'auto']} />
+                          <Line type="monotone" dataKey="pressure" name="He Press" stroke="#00c8dc" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                          <Tooltip
+                            contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}
+                            formatter={(value: number) => [value.toFixed(2), 'He Press']}
+                            labelFormatter={() => ''}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : null}
+                  </div>
+                </div>
 
-                <div style={{ padding: '8px 16px 14px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                {/* Quick view — secondary measurables */}
+                <div style={{ padding: '10px 16px 14px', display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 5 }}>
                   <div className="metric-chip">
                     <span className="metric-chip-label">Flow</span>
-                    <span className="metric-chip-value" style={{ color: flow != null && flow < 0.6 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 13 }}>{flow != null ? flow.toFixed(2) : '—'}</span>
+                    <span className="metric-chip-value" style={{ color: flow != null && flow < 0.6 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 12 }}>{flow != null ? flow.toFixed(2) : '—'}</span>
                   </div>
                   <div className="metric-chip">
                     <span className="metric-chip-label">Chiller</span>
-                    <span className="metric-chip-value" style={{ color: temp != null && temp > 75 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 13 }}>{temp != null ? `${temp.toFixed(1)}°` : '—'}</span>
+                    <span className="metric-chip-value" style={{ color: chiller != null && chiller > 75 ? 'var(--yellow)' : 'var(--text-primary)', fontSize: 12 }}>{chiller != null ? `${chiller.toFixed(1)}°` : '—'}</span>
                   </div>
                   <div className="metric-chip">
-                    <span className="metric-chip-label">He Press</span>
-                    <span className="metric-chip-value" style={{ fontSize: 13 }}>{asset.telemetry?.he_pressure != null ? asset.telemetry.he_pressure.toFixed(2) : '—'}</span>
+                    <span className="metric-chip-label">Shield</span>
+                    <span className="metric-chip-value" style={{ fontSize: 12 }}>{shield != null ? `${shield.toFixed(1)}K` : '—'}</span>
+                  </div>
+                  <div className="metric-chip">
+                    <span className="metric-chip-label">Compr</span>
+                    <span className="metric-chip-value" style={{ fontSize: 12 }}>{compr != null ? compr.toFixed(0) : '—'}</span>
+                  </div>
+                  <div className="metric-chip">
+                    <span className="metric-chip-label">ColdHd</span>
+                    <span className="metric-chip-value" style={{ fontSize: 12 }}>{coldhead != null ? `${coldhead.toFixed(1)}K` : '—'}</span>
                   </div>
                 </div>
               </div>
