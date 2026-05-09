@@ -12,6 +12,9 @@ interface TelRow {
   chiller_temp: number | null
   he_pressure: number | null
   shield_temp: number | null
+  compressor: number | null
+  cs1: number | null
+  coldhead_temp_k: number | null
 }
 
 interface LatestSnapshot {
@@ -21,6 +24,9 @@ interface LatestSnapshot {
   chiller_temp: number | null
   he_pressure: number | null
   shield_temp: number | null
+  compressor: number | null
+  cs1: number | null
+  coldhead_temp_k: number | null
 }
 
 const HISTORY_RANGES_HOURS = [24, 24 * 7, 24 * 30] as const
@@ -109,11 +115,14 @@ export default function AssetDetail() {
       const tsNum = typeof data.ts === 'number' ? data.ts : Number(data.ts)
       setLatest({
         ts: tsNum,
-        helium_level: pickNum(v, 'helium_level', 'he_level', 'helium_level_pct'),
-        water_flow:   pickNum(v, 'flow', 'water_flow', 'compressor_helium_flow_g_min'),
-        chiller_temp: pickNum(v, 'chiller_temp', 'room_temp_c'),
-        he_pressure:  pickNum(v, 'he_pressure', 'magnet_pressure_mbar'),
-        shield_temp:  pickNum(v, 'shield_temp', 'shield_temp_k', 'shield'),
+        helium_level:    pickNum(v, 'helium_level', 'he_level', 'helium_level_pct'),
+        water_flow:      pickNum(v, 'flow', 'water_flow', 'compressor_helium_flow_g_min'),
+        chiller_temp:    pickNum(v, 'chiller_temp', 'room_temp_c'),
+        he_pressure:     pickNum(v, 'he_pressure', 'magnet_pressure_mbar'),
+        shield_temp:     pickNum(v, 'shield_temp', 'shield_temp_k', 'shield'),
+        compressor:      pickNum(v, 'compressor', 'compressor_pressure_psi'),
+        cs1:             pickNum(v, 'cs1'),
+        coldhead_temp_k: pickNum(v, 'coldhead_temp_k'),
       })
     } else {
       setLatest(null)
@@ -137,19 +146,25 @@ export default function AssetDetail() {
       if (error) continue
       if (data && data.length > 0) {
         const rows: TelRow[] = (data as Array<{
-          bucket_ts: number | string
-          helium_level: number | string | null
-          he_pressure:  number | string | null
-          water_flow:   number | string | null
-          chiller_temp: number | string | null
-          shield_temp:  number | string | null
+          bucket_ts:       number | string
+          helium_level:    number | string | null
+          he_pressure:     number | string | null
+          water_flow:      number | string | null
+          chiller_temp:    number | string | null
+          shield_temp:     number | string | null
+          compressor:      number | string | null
+          cs1:             number | string | null
+          coldhead_temp_k: number | string | null
         }>).map(row => ({
-          ts:           typeof row.bucket_ts === 'number' ? row.bucket_ts : Number(row.bucket_ts),
-          helium_level: row.helium_level == null ? null : Number(row.helium_level),
-          water_flow:   row.water_flow   == null ? null : Number(row.water_flow),
-          chiller_temp: row.chiller_temp == null ? null : Number(row.chiller_temp),
-          he_pressure:  row.he_pressure  == null ? null : Number(row.he_pressure),
-          shield_temp:  row.shield_temp  == null ? null : Number(row.shield_temp),
+          ts:              typeof row.bucket_ts === 'number' ? row.bucket_ts : Number(row.bucket_ts),
+          helium_level:    row.helium_level    == null ? null : Number(row.helium_level),
+          water_flow:      row.water_flow      == null ? null : Number(row.water_flow),
+          chiller_temp:    row.chiller_temp    == null ? null : Number(row.chiller_temp),
+          he_pressure:     row.he_pressure     == null ? null : Number(row.he_pressure),
+          shield_temp:     row.shield_temp     == null ? null : Number(row.shield_temp),
+          compressor:      row.compressor      == null ? null : Number(row.compressor),
+          cs1:             row.cs1             == null ? null : Number(row.cs1),
+          coldhead_temp_k: row.coldhead_temp_k == null ? null : Number(row.coldhead_temp_k),
         }))
         setTelemetry(rows)
         setHistoryHours(hours)
@@ -184,10 +199,14 @@ export default function AssetDetail() {
     time: new Date(t.ts).toLocaleString([], historyHours > 24
       ? { month: 'short', day: 'numeric', hour: '2-digit' }
       : { hour: '2-digit', minute: '2-digit' }),
-    'He Level': t.helium_level,
-    'Flow': t.water_flow,
-    'Chiller': t.chiller_temp,
-    'He Press': t.he_pressure,
+    'He Level':  t.helium_level,
+    'Flow':      t.water_flow,
+    'Chiller':   t.chiller_temp,
+    'He Press':  t.he_pressure,
+    'Shield':    t.shield_temp,
+    'Compressor': t.compressor,
+    'Cold Head': t.coldhead_temp_k,
+    'CS1':       t.cs1,
   }))
 
   if (loading) return <div className="empty-state">Loading…</div>
@@ -231,20 +250,25 @@ export default function AssetDetail() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 18 }}>
         {/* Left: chart + metrics */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Latest metrics — show whatever the most-recent values were, even if stale */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+          {/* Latest metrics — full set. Cards auto-fit on narrow screens.
+              Each metric defines its own warn/caution thresholds and decimal precision. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
             {[
-              { label: 'Helium Level', val: latest?.helium_level ?? null, unit: '%', warn: (v: number) => v < 60, caution: (v: number) => v < 75 },
-              { label: 'Water Flow', val: latest?.water_flow ?? null, unit: 'L/min', warn: (v: number) => v < 0.6, caution: () => false },
-              { label: 'Chiller Temp', val: latest?.chiller_temp ?? null, unit: '°C', warn: (v: number) => v > 75, caution: () => false },
-              { label: 'He Pressure', val: latest?.he_pressure ?? null, unit: 'mbar', warn: (v: number) => v > 3, caution: () => false },
+              { label: 'Helium Level', val: latest?.helium_level ?? null,    unit: '%',    decimals: 1, warn: (v: number) => v < 60,  caution: (v: number) => v < 75 },
+              { label: 'He Pressure',  val: latest?.he_pressure ?? null,     unit: 'mbar', decimals: 2, warn: (v: number) => v > 3,   caution: () => false },
+              { label: 'Water Flow',   val: latest?.water_flow ?? null,      unit: 'L/min',decimals: 2, warn: (v: number) => v < 0.6, caution: () => false },
+              { label: 'Chiller Temp', val: latest?.chiller_temp ?? null,    unit: '°C',   decimals: 1, warn: (v: number) => v > 75,  caution: () => false },
+              { label: 'Shield Temp',  val: latest?.shield_temp ?? null,     unit: 'K',    decimals: 1, warn: () => false,            caution: () => false },
+              { label: 'Compressor',   val: latest?.compressor ?? null,      unit: 'PSI',  decimals: 0, warn: () => false,            caution: () => false },
+              { label: 'Cold Head',    val: latest?.coldhead_temp_k ?? null, unit: 'K',    decimals: 1, warn: () => false,            caution: () => false },
+              { label: 'CS1',          val: latest?.cs1 ?? null,             unit: '',     decimals: 2, warn: () => false,            caution: () => false },
             ].map(m => {
               const color = m.val == null ? 'var(--text-muted)' : m.warn(m.val) ? 'var(--red)' : m.caution(m.val) ? 'var(--yellow)' : 'var(--green)'
               return (
                 <div key={m.label} className="card">
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{m.label}</div>
-                  <div style={{ fontSize: 26, fontWeight: 700, color }}>{m.val != null ? m.val.toFixed(m.unit === '%' || m.unit === 'mbar' ? 1 : 2) : '—'}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{m.unit}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color }}>{m.val != null ? m.val.toFixed(m.decimals) : '—'}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{m.unit || ' '}</div>
                 </div>
               )
             })}
@@ -268,10 +292,14 @@ export default function AssetDetail() {
                   <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }} />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-                  <Line type="monotone" dataKey="He Level" stroke="#22d3a0" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
-                  <Line type="monotone" dataKey="Flow" stroke="#00c8dc" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
-                  <Line type="monotone" dataKey="Chiller" stroke="#f0b429" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
-                  <Line type="monotone" dataKey="He Press" stroke="#f05252" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="He Level"   stroke="#22d3a0" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="He Press"   stroke="#f05252" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="Flow"       stroke="#00c8dc" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="Chiller"    stroke="#f0b429" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="Shield"     stroke="#a78bfa" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="Compressor" stroke="#fb923c" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="Cold Head"  stroke="#67e8f9" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="CS1"        stroke="#94a3b8" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
                 </LineChart>
               </ResponsiveContainer>
             ) : (
@@ -289,11 +317,14 @@ export default function AssetDetail() {
           {chartData.length > 1 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
               {([
-                { key: 'He Level', label: 'Helium Level',  unit: '%',     color: '#22d3a0', precision: 1 },
-                { key: 'He Press', label: 'He Pressure',   unit: 'mbar',  color: '#f05252', precision: 2 },
-                { key: 'Flow',     label: 'Water Flow',    unit: 'L/min', color: '#00c8dc', precision: 2 },
-                { key: 'Chiller',  label: 'Chiller Temp',  unit: '°C',    color: '#f0b429', precision: 1 },
-                { key: 'Shield',   label: 'Shield Temp',   unit: 'K',     color: '#a78bfa', precision: 1 },
+                { key: 'He Level',   label: 'Helium Level', unit: '%',     color: '#22d3a0', precision: 1 },
+                { key: 'He Press',   label: 'He Pressure',  unit: 'mbar',  color: '#f05252', precision: 2 },
+                { key: 'Flow',       label: 'Water Flow',   unit: 'L/min', color: '#00c8dc', precision: 2 },
+                { key: 'Chiller',    label: 'Chiller Temp', unit: '°C',    color: '#f0b429', precision: 1 },
+                { key: 'Shield',     label: 'Shield Temp',  unit: 'K',     color: '#a78bfa', precision: 1 },
+                { key: 'Compressor', label: 'Compressor',   unit: 'PSI',   color: '#fb923c', precision: 0 },
+                { key: 'Cold Head',  label: 'Cold Head',    unit: 'K',     color: '#67e8f9', precision: 1 },
+                { key: 'CS1',        label: 'CS1',          unit: '',      color: '#94a3b8', precision: 2 },
               ] as Array<{ key: keyof typeof chartData[0]; label: string; unit: string; color: string; precision: number }>).map(m => {
                 // Filter to a slim {time, v} payload — keeps the chart isolated to its own metric.
                 const series = chartData.map(c => ({ time: c.time, v: c[m.key] }))
