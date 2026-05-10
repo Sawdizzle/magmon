@@ -55,7 +55,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setCompanies(data)
       const stored = localStorage.getItem('magmon_company')
       const found = stored ? data.find((c: Company) => c.id === stored) : null
-      setSelectedCompanyState(found ?? data[0])
+      // If we have no stored preference, prefer the first non-demo company so a
+      // brand-new device doesn't land on the empty Demo Medical Imaging fixture.
+      const fallback = data.find((c: Company) => !c.id.startsWith('demo-')) ?? data[0]
+      setSelectedCompanyState(found ?? fallback)
     }
   }
 

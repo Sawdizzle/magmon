@@ -41,7 +41,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-shell">
-      {/* Mobile-only top bar with hamburger + branding */}
+      {/* Mobile-only top bar with hamburger + branding + compact company selector */}
       <header className="mobile-topbar">
         <button
           className="mobile-menu-btn"
@@ -54,6 +54,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <MagmonLogo size={22} />
           <div style={{ fontWeight: 700, fontSize: 15 }}>Mag<span style={{ color: 'var(--cyan)' }}>Mon</span></div>
         </div>
+        {companies.length > 1 && (
+          <select
+            aria-label="Company"
+            className="mobile-company-select"
+            value={selectedCompany?.id ?? ''}
+            onChange={e => {
+              const c = companies.find(c => c.id === e.target.value)
+              if (c) setSelectedCompany(c)
+            }}
+          >
+            {companies.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        )}
       </header>
 
       {/* Mobile-only overlay (taps close the sidebar) */}

@@ -422,6 +422,16 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
 .sidebar-close-btn { display: none; }
 .sidebar-overlay { display: none; }
 
+/* Compact company switcher in the mobile top bar */
+.mobile-company-select {
+  margin-left: auto;
+  max-width: 50%;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 8px;
+  text-overflow: ellipsis;
+}
+
 @media (max-width: 768px) {
   .app-shell { flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
 
