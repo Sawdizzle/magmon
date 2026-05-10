@@ -391,3 +391,110 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
 .alert-row.sev-critical { border-left: 3px solid var(--red); }
 .alert-row.sev-warning { border-left: 3px solid var(--yellow); }
 .alert-row.sev-info { border-left: 3px solid var(--cyan); }
+
+/* =============================================================
+   Mobile-friendly app shell
+   ============================================================= */
+.app-shell { display: flex; height: 100vh; overflow: hidden; }
+
+/* Hidden by default on desktop; revealed in the mobile media query below */
+.mobile-topbar {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.mobile-menu-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+}
+.mobile-menu-btn:hover { background: var(--bg-hover); }
+.sidebar-close-btn { display: none; }
+.sidebar-overlay { display: none; }
+
+@media (max-width: 768px) {
+  .app-shell { flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
+
+  /* Top bar takes over branding + nav-toggle */
+  .mobile-topbar { display: flex; }
+
+  /* Sidebar slides in from the left as an overlay */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 260px;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    z-index: 110;
+    box-shadow: 2px 0 24px rgba(0,0,0,0.5);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-close-btn { display: flex; }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(2px);
+    z-index: 105;
+  }
+
+  /* Main content takes the full width with tighter padding */
+  .main-content {
+    padding: 14px 12px 24px;
+    min-height: 0;
+  }
+
+  /* Page-level tighter rhythm */
+  .page { gap: 14px; }
+  .page-title { font-size: 18px; }
+  .page-header { gap: 8px; }
+
+  /* KPI tiles fit 2-3 across instead of 5+ */
+  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+  .kpi-card { padding: 10px 12px; }
+  .kpi-value { font-size: 22px; }
+
+  /* Filter bar stacks; sort buttons wrap to a second line */
+  .filter-bar { gap: 6px; }
+  .filter-bar input { max-width: 100% !important; flex: 1 1 100%; }
+  .filter-bar select { flex: 1 1 calc(50% - 4px); width: auto; }
+
+  /* Two columns for asset cards on phones (was 1 due to 300px minmax) */
+  .asset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .asset-card { font-size: 12px; }
+  .asset-card .he-bar-bg { height: 4px; }
+  .asset-card .metric-chip { padding: 6px 8px; }
+  .asset-card .metric-chip-label { font-size: 9px; }
+  .asset-card .metric-chip-value { font-size: 11px !important; }
+
+  /* Tables get horizontal-scroll containers when narrow */
+  .card table { min-width: 540px; }
+  .card { overflow-x: auto; }
+}
+
+/* AssetDetail two-column layout that stacks on mobile */
+.asset-detail-grid { display: grid; grid-template-columns: 1fr 300px; gap: 18px; }
+@media (max-width: 768px) {
+  .asset-detail-grid { grid-template-columns: 1fr; gap: 12px; }
+  .asset-detail-grid > .card { height: auto !important; }
+}
+
+/* Even narrower phones: stay readable */
+@media (max-width: 380px) {
+  .asset-card { padding: 0; }
+  .asset-card .metric-chip { padding: 5px 6px; }
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

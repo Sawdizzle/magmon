@@ -247,7 +247,7 @@ export default function AssetDetail() {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 18 }}>
+      <div className="asset-detail-grid">
         {/* Left: chart + metrics */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* 1. Combined chart — all metrics overlaid. Auto-widens 24h -> 7d -> 30d. */}
