@@ -8,10 +8,21 @@ import type { Asset } from '../lib/types'
 import { naturalCompare, usePersistedState, statusOrder } from '../lib/listControls'
 
 type SortKey = 'name' | 'helium' | 'status' | 'site'
-// 'reporting' = any asset with fresh telemetry (online/warning/critical combined).
-// 'online' is reserved for "online and healthy" if you ever want it back, but
-// the Online KPI tile filters by 'reporting' so the count matches "alive gateways".
-type StatusFilter = 'all' | 'reporting' | 'online' | 'offline' | 'warning' | 'critical'
+// 'reporting'        = any asset with fresh telemetry (online/warning/critical combined).
+// 'recently_offline' = currently offline but had telemetry in the last 24h (i.e. just dropped).
+// 'online'           = reserved if you ever want "online and healthy" back as a filter.
+type StatusFilter = 'all' | 'reporting' | 'online' | 'offline' | 'warning' | 'critical' | 'recently_offline'
+
+// An asset that was reporting within the last 24h but is now stale/offline.
+const RECENTLY_OFFLINE_WINDOW_MS = 24 * 60 * 60 * 1000
+function isRecentlyOffline(a: Asset): boolean {
+  if (a.status !== 'offline') return false
+  const ts = a.telemetry?.sampled_at
+  if (!ts) return false  // never reported doesn't count as "recently" dropped
+  const sampled = typeof ts === 'number' ? ts : new Date(ts as unknown as string).getTime()
+  if (!Number.isFinite(sampled)) return false
+  return (Date.now() - sampled) < RECENTLY_OFFLINE_WINDOW_MS
+}
 
 function heClass(v: number | null) {
   if (v == null) return 'level-crit'
@@ -186,6 +197,8 @@ export default function Dashboard() {
     if (statusFilter === 'reporting') {
       // Any alive gateway: online OR warning OR critical (i.e. not offline)
       list = list.filter(a => a.status !== 'offline')
+    } else if (statusFilter === 'recently_offline') {
+      list = list.filter(isRecentlyOffline)
     } else if (statusFilter !== 'all') {
       list = list.filter(a => a.status === statusFilter)
     }
@@ -213,11 +226,13 @@ export default function Dashboard() {
     // "Online" KPI counts any reporting gateway (online + warning + critical),
     // matching the user's mental model of "machines on and reporting".
     // Warning/Critical are sub-categories so their counts overlap with Online.
-    const reporting = assets.filter(a => a.status !== 'offline').length
-    const warning   = assets.filter(a => a.status === 'warning').length
-    const critical  = assets.filter(a => a.status === 'critical').length
-    const offline   = assets.filter(a => a.status === 'offline').length
-    return { total: assets.length, reporting, warning, critical, offline }
+    // "Recently Offline" is also a sub-category of Offline (just-dropped assets).
+    const reporting        = assets.filter(a => a.status !== 'offline').length
+    const warning          = assets.filter(a => a.status === 'warning').length
+    const critical         = assets.filter(a => a.status === 'critical').length
+    const offline          = assets.filter(a => a.status === 'offline').length
+    const recentlyOffline  = assets.filter(isRecentlyOffline).length
+    return { total: assets.length, reporting, warning, critical, offline, recentlyOffline }
   }, [assets])
 
   function toggleSort(k: SortKey) {
@@ -257,11 +272,12 @@ export default function Dashboard() {
           (or click Total Assets) to clear. The active tile gets a colored border + glow. */}
       <div className="kpi-grid">
         {([
-          { key: 'all',       label: 'Total Assets', color: 'var(--text-primary)', count: kpi.total },
-          { key: 'reporting', label: 'Online',       color: 'var(--green)',        count: kpi.reporting },
-          { key: 'warning',   label: 'Warning',      color: 'var(--yellow)',       count: kpi.warning },
-          { key: 'critical',  label: 'Critical',     color: 'var(--red)',          count: kpi.critical },
-          { key: 'offline',   label: 'Offline',      color: 'var(--text-muted)',   count: kpi.offline },
+          { key: 'all',              label: 'Total Assets',     color: 'var(--text-primary)', count: kpi.total },
+          { key: 'reporting',        label: 'Online',           color: 'var(--green)',        count: kpi.reporting },
+          { key: 'warning',          label: 'Warning',          color: 'var(--yellow)',       count: kpi.warning },
+          { key: 'critical',         label: 'Critical',         color: 'var(--red)',          count: kpi.critical },
+          { key: 'recently_offline', label: 'Recently Offline', color: 'var(--orange)',       count: kpi.recentlyOffline },
+          { key: 'offline',          label: 'Offline',          color: 'var(--text-muted)',   count: kpi.offline },
         ] as Array<{ key: StatusFilter; label: string; color: string; count: number }>).map(tile => {
           const active = statusFilter === tile.key
           return (
@@ -297,6 +313,7 @@ export default function Dashboard() {
           <option value="reporting">Online (any reporting)</option>
           <option value="warning">Warning</option>
           <option value="critical">Critical</option>
+          <option value="recently_offline">Recently Offline (last 24h)</option>
           <option value="offline">Offline</option>
         </select>
         <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)}>
