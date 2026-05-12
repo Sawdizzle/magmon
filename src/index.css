@@ -183,8 +183,8 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
 }
 .modal h2 { font-size: 18px; margin-bottom: 20px; }
 
-/* Page layout */
-.page { display: flex; flex-direction: column; gap: 20px; max-width: 1400px; }
+/* Page layout — widened so the dashboard can pack 3–4 asset cards across on big screens */
+.page { display: flex; flex-direction: column; gap: 20px; max-width: 1800px; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .page-title { font-size: 22px; font-weight: 600; }
 .page-subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
@@ -397,9 +397,10 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
    ============================================================= */
 .app-shell { display: flex; height: 100vh; overflow: hidden; }
 
-/* Hidden by default on desktop; revealed in the mobile media query below */
-.mobile-topbar {
-  display: none;
+/* Top bar appears whenever the sidebar is collapsed (works on desktop AND mobile).
+   Hidden when the sidebar is open. */
+.topbar {
+  display: none;  /* default; .sidebar-closed below flips this on */
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
@@ -409,6 +410,8 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
   top: 0;
   z-index: 50;
 }
+.app-shell.sidebar-closed .topbar { display: flex; }
+
 .mobile-menu-btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -417,9 +420,17 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
   border-radius: var(--radius);
   display: flex;
   align-items: center;
+  cursor: pointer;
 }
 .mobile-menu-btn:hover { background: var(--bg-hover); }
-.sidebar-close-btn { display: none; }
+
+/* Collapse button inside the sidebar header — visible on every viewport now */
+.sidebar-collapse-btn { display: flex; }
+
+/* Hide the sidebar entirely on desktop when the user collapses it.
+   (Mobile relies on the slide-in transform handled in the @media block.) */
+.app-shell.sidebar-closed .sidebar { display: none; }
+
 .sidebar-overlay { display: none; }
 
 /* Compact company switcher in the mobile top bar */
@@ -435,24 +446,27 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
 @media (max-width: 768px) {
   .app-shell { flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
 
-  /* Top bar takes over branding + nav-toggle */
-  .mobile-topbar { display: flex; }
+  /* On mobile the topbar is always visible (even when sidebar is overlaid open, since
+     the overlay sits above content). */
+  .topbar { display: flex !important; }
 
-  /* Sidebar slides in from the left as an overlay */
-  .sidebar {
+  /* On mobile the sidebar slides in over the content. We re-show it because the desktop
+     rule (.sidebar-closed .sidebar { display:none }) would otherwise hide it. */
+  .app-shell.sidebar-closed .sidebar,
+  .app-shell.sidebar-open .sidebar {
+    display: flex;
     position: fixed;
     top: 0; left: 0; bottom: 0;
     width: 260px;
     height: 100vh;
-    transform: translateX(-100%);
-    transition: transform 0.22s ease;
     z-index: 110;
     box-shadow: 2px 0 24px rgba(0,0,0,0.5);
+    transition: transform 0.22s ease;
   }
-  .sidebar.open { transform: translateX(0); }
-  .sidebar-close-btn { display: flex; }
+  .app-shell.sidebar-closed .sidebar { transform: translateX(-100%); }
+  .app-shell.sidebar-open    .sidebar { transform: translateX(0); }
 
-  .sidebar-overlay {
+  .app-shell.sidebar-open .sidebar-overlay {
     display: block;
     position: fixed;
     inset: 0;

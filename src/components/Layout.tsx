@@ -26,10 +26,24 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { companies, selectedCompany, setSelectedCompany, user, isAppAdmin, signOut } = useApp()
   const navigate = useNavigate()
   const location = useLocation()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  // Close the off-canvas sidebar whenever the user navigates to a new route on mobile.
-  useEffect(() => { setSidebarOpen(false) }, [location.pathname])
+  // Default to "open" on desktop and "closed" on mobile, with localStorage persisting the user's
+  // explicit choice across both viewports.
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const stored = typeof window !== 'undefined' ? localStorage.getItem('magmon_sidebar_open') : null
+    if (stored === '1') return true
+    if (stored === '0') return false
+    return typeof window !== 'undefined' && window.innerWidth > 768
+  })
+  useEffect(() => {
+    try { localStorage.setItem('magmon_sidebar_open', sidebarOpen ? '1' : '0') } catch { /* ignore */ }
+  }, [sidebarOpen])
+
+  // Auto-close the off-canvas sidebar when the user navigates on mobile.
+  // (No effect on desktop — the user's collapse choice should persist across navigations.)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarOpen(false)
+  }, [location.pathname])
 
   // Close on Escape for accessibility
   useEffect(() => {
@@ -40,9 +54,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [sidebarOpen])
 
   return (
-    <div className="app-shell">
-      {/* Mobile-only top bar with hamburger + branding + compact company selector */}
-      <header className="mobile-topbar">
+    <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
+      {/* Top bar appears whenever the sidebar is collapsed (mobile OR desktop). */}
+      <header className="topbar">
         <button
           className="mobile-menu-btn"
           aria-label="Open navigation"
@@ -71,7 +85,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         )}
       </header>
 
-      {/* Mobile-only overlay (taps close the sidebar) */}
+      {/* Mobile-only overlay (taps close the sidebar). Hidden on desktop via CSS. */}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
 
       {/* Sidebar (always rendered; CSS controls slide-in on mobile) */}
@@ -81,8 +95,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <MagmonLogo size={30} />
           <div className="sidebar-logo-text">Mag<span>Mon</span></div>
           <button
-            className="sidebar-close-btn"
-            aria-label="Close navigation"
+            className="sidebar-collapse-btn"
+            aria-label="Collapse navigation"
+            title="Collapse"
             onClick={() => setSidebarOpen(false)}
             style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'var(--text-muted)', padding: 4, cursor: 'pointer', display: 'flex' }}
           >
