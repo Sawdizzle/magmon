@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../lib/context'
 import {
   Shield, Plus, Edit2, Save, X, Trash2, ServerCog, MapPin, Building2,
-  Users as UsersIcon, FileCode2, Copy, Check,
+  Users as UsersIcon, FileCode2, Copy, Check, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { naturalCompare } from '../lib/listControls'
 
@@ -515,6 +515,8 @@ function GatewaysTab() {
 // =============================================================
 // Users (App Admins + Company Members)
 // =============================================================
+interface Membership { company_id: string; company_name: string; role: string; created_at: string }
+
 function UsersTab({ selectedCompany, ctxCompanies }: { selectedCompany: { id: string; name: string } | null; ctxCompanies: Company[] }) {
   const [users, setUsers] = useState<RegisteredUser[]>([])
   const [members, setMembers] = useState<CompanyMember[]>([])
@@ -522,6 +524,14 @@ function UsersTab({ selectedCompany, ctxCompanies }: { selectedCompany: { id: st
   const [addEmail, setAddEmail] = useState('')
   const [addRole, setAddRole] = useState<'admin' | 'member' | 'viewer'>('member')
   const [err, setErr] = useState<string | null>(null)
+
+  // Per-user membership state
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [memberships, setMemberships] = useState<Record<string, Membership[]>>({})
+  const [membLoading, setMembLoading] = useState<Record<string, boolean>>({})
+  // Per-user "add to company" mini-form state
+  const [addCompanyId, setAddCompanyId] = useState<Record<string, string>>({})
+  const [addCompanyRole, setAddCompanyRole] = useState<Record<string, 'admin' | 'member' | 'viewer'>>({})
 
   useEffect(() => { load() }, [selectedCompany?.id])
 
@@ -534,6 +544,23 @@ function UsersTab({ selectedCompany, ctxCompanies }: { selectedCompany: { id: st
     setUsers((u.data ?? []) as RegisteredUser[])
     setMembers((m.data ?? []) as CompanyMember[])
     setLoading(false)
+  }
+
+  async function loadMemberships(userId: string) {
+    setMembLoading(m => ({ ...m, [userId]: true }))
+    const { data, error } = await supabase.rpc('list_user_memberships', { p_user_id: userId })
+    setMembLoading(m => ({ ...m, [userId]: false }))
+    if (error) { setErr(error.message); return }
+    setMemberships(m => ({ ...m, [userId]: (data ?? []) as Membership[] }))
+  }
+
+  function toggleExpand(userId: string) {
+    if (expanded === userId) {
+      setExpanded(null)
+    } else {
+      setExpanded(userId)
+      if (!memberships[userId]) loadMemberships(userId)
+    }
   }
 
   async function toggleAppAdmin(userId: string, current: boolean) {
@@ -576,38 +603,181 @@ function UsersTab({ selectedCompany, ctxCompanies }: { selectedCompany: { id: st
     load()
   }
 
+  // Per-user company assignment
+  async function assignUserToCompany(userId: string) {
+    setErr(null)
+    const cid = addCompanyId[userId]
+    const role = addCompanyRole[userId] ?? 'member'
+    if (!cid) { setErr('Pick a company'); return }
+    const { error } = await supabase.rpc('add_company_member_by_user_id', {
+      p_user_id: userId, p_company_id: cid, p_role: role,
+    })
+    if (error) { setErr(error.message); return }
+    setAddCompanyId(m => ({ ...m, [userId]: '' }))
+    loadMemberships(userId)
+    // also refresh the bottom "company members" table in case the picked company matches
+    if (selectedCompany && cid === selectedCompany.id) load()
+  }
+
+  async function removeUserFromCompany(userId: string, companyId: string, companyName: string, email: string) {
+    if (!confirm(`Remove ${email} from ${companyName}?`)) return
+    setErr(null)
+    const { error } = await supabase.rpc('remove_company_member', {
+      p_company_id: companyId, p_user_id: userId,
+    })
+    if (error) { setErr(error.message); return }
+    loadMemberships(userId)
+    if (selectedCompany && companyId === selectedCompany.id) load()
+  }
+
+  async function changeUserRoleAt(userId: string, companyId: string, role: string) {
+    setErr(null)
+    const { error } = await supabase.rpc('set_company_member_role', {
+      p_company_id: companyId, p_user_id: userId, p_role: role,
+    })
+    if (error) { setErr(error.message); return }
+    loadMemberships(userId)
+    if (selectedCompany && companyId === selectedCompany.id) load()
+  }
+
   const sortedUsers = useMemo(() => [...users].sort((a, b) => naturalCompare(a.email, b.email)), [users])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {err && <div style={{ color: 'var(--red)', fontSize: 12 }}>{err}</div>}
 
-      {/* App Admins — global */}
+      {/* All Users — global. Click a row to expand and manage their company memberships. */}
       <div>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>App Admins (global)</div>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>App admins can manage every company. Toggle the switch to promote/demote.</div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>All Users</div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+          Click a user to expand and assign companies (with role). The "Make admin" button grants global app-admin (every company).
+        </div>
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <table>
-            <thead><tr><th>Email</th><th>User ID</th><th>Joined</th><th style={{ width: 140 }}>App Admin</th></tr></thead>
+            <thead><tr>
+              <th style={{ width: 28 }}></th>
+              <th>Email</th>
+              <th>Companies</th>
+              <th>Joined</th>
+              <th style={{ width: 140 }}>App Admin</th>
+            </tr></thead>
             <tbody>
-              {loading ? <tr><td colSpan={4} style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)' }}>Loading…</td></tr> :
-               sortedUsers.length === 0 ? <tr><td colSpan={4} style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)' }}>No registered users.</td></tr> :
-               sortedUsers.map(u => (
-                <tr key={u.user_id}>
-                  <td>{u.email}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>{u.user_id.slice(0, 8)}…</td>
-                  <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(u.created_at).toLocaleDateString()}</td>
-                  <td>
-                    <button
-                      className={u.is_app_admin ? 'btn-primary' : 'btn-ghost'}
-                      style={{ padding: '4px 10px', fontSize: 11 }}
-                      onClick={() => toggleAppAdmin(u.user_id, u.is_app_admin)}
-                    >
-                      {u.is_app_admin ? '✓ Admin' : 'Make admin'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {loading ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)' }}>Loading…</td></tr> :
+               sortedUsers.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)' }}>No registered users.</td></tr> :
+               sortedUsers.map(u => {
+                const isOpen = expanded === u.user_id
+                const userMembs = memberships[u.user_id] ?? []
+                const memberOf = new Set(userMembs.map(m => m.company_id))
+                const availableCompanies = ctxCompanies.filter(c => !memberOf.has(c.id))
+                return (
+                  <React.Fragment key={u.user_id}>
+                    <tr style={{ cursor: 'pointer' }} onClick={() => toggleExpand(u.user_id)}>
+                      <td style={{ color: 'var(--text-muted)' }}>
+                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </td>
+                      <td>{u.email}</td>
+                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                        {!memberships[u.user_id]
+                          ? <span style={{ color: 'var(--text-muted)' }}>{u.is_app_admin ? 'app admin (all)' : 'click to load'}</span>
+                          : userMembs.length === 0
+                            ? <span>—</span>
+                            : userMembs.map(m => m.company_name).join(', ')}
+                      </td>
+                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(u.created_at).toLocaleDateString()}</td>
+                      <td onClick={e => e.stopPropagation()}>
+                        <button
+                          className={u.is_app_admin ? 'btn-primary' : 'btn-ghost'}
+                          style={{ padding: '4px 10px', fontSize: 11 }}
+                          onClick={() => toggleAppAdmin(u.user_id, u.is_app_admin)}
+                        >
+                          {u.is_app_admin ? '✓ Admin' : 'Make admin'}
+                        </button>
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr>
+                        <td colSpan={5} style={{ background: 'var(--bg-surface)', padding: '14px 18px' }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
+                            Companies {u.email} belongs to
+                          </div>
+                          {membLoading[u.user_id] ? (
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading memberships…</div>
+                          ) : userMembs.length === 0 ? (
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+                              Not yet assigned to any company.
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                              {userMembs.map(m => (
+                                <div key={m.company_id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+                                  <Building2 size={12} style={{ color: 'var(--text-muted)' }} />
+                                  <span style={{ flex: 1 }}>{m.company_name}</span>
+                                  <select
+                                    value={m.role}
+                                    onChange={e => changeUserRoleAt(u.user_id, m.company_id, e.target.value)}
+                                    style={{ fontSize: 11, padding: '3px 6px', width: 'auto' }}
+                                  >
+                                    <option value="admin">Admin</option>
+                                    <option value="member">Member</option>
+                                    <option value="viewer">Viewer</option>
+                                  </select>
+                                  <button
+                                    className="btn-danger"
+                                    style={{ padding: '3px 8px', fontSize: 11 }}
+                                    onClick={() => removeUserFromCompany(u.user_id, m.company_id, m.company_name, u.email)}
+                                  >
+                                    <Trash2 size={11} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {availableCompanies.length > 0 ? (
+                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                              <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                                <label style={{ fontSize: 10 }}>Assign to company</label>
+                                <select
+                                  value={addCompanyId[u.user_id] ?? ''}
+                                  onChange={e => setAddCompanyId(m => ({ ...m, [u.user_id]: e.target.value }))}
+                                  style={{ fontSize: 12 }}
+                                >
+                                  <option value="">— pick —</option>
+                                  {availableCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label style={{ fontSize: 10 }}>Role</label>
+                                <select
+                                  value={addCompanyRole[u.user_id] ?? 'member'}
+                                  onChange={e => setAddCompanyRole(m => ({ ...m, [u.user_id]: e.target.value as 'admin' | 'member' | 'viewer' }))}
+                                  style={{ fontSize: 12 }}
+                                >
+                                  <option value="admin">Admin</option>
+                                  <option value="member">Member</option>
+                                  <option value="viewer">Viewer</option>
+                                </select>
+                              </div>
+                              <button
+                                className="btn-primary"
+                                style={{ padding: '6px 14px', fontSize: 12 }}
+                                onClick={() => assignUserToCompany(u.user_id)}
+                                disabled={!addCompanyId[u.user_id]}
+                              >
+                                Assign
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                              Already a member of every company.
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                )
+              })}
             </tbody>
           </table>
         </div>
