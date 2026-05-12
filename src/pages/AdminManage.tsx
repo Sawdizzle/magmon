@@ -345,7 +345,8 @@ function GatewaysTab() {
   async function load() {
     setLoading(true)
     const [gw, s] = await Promise.all([
-      supabase.from('gateways').select('id, hostname, company_id, site_id, type, ip_address').order('hostname'),
+      // 'kind' is the real column; alias to 'type' so render code is unchanged
+      supabase.from('gateways').select('id, hostname, company_id, site_id, type:kind, ip_address').order('hostname'),
       supabase.from('sites').select('id, name, city, state, company_id').order('name'),
     ])
     setGateways(gw.data ?? [])

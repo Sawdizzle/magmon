@@ -78,7 +78,8 @@ export default function Gateways() {
     setLoading(true)
     const { data: gws } = await supabase
       .from('gateways')
-      .select('id, hostname, type, status, last_heartbeat, site_id')
+      // 'kind' is the real column ('pi' | 'pc'); alias it to 'type' for backwards-compat with the existing render code
+      .select('id, hostname, type:kind, status, last_heartbeat, site_id')
       .eq('company_id', selectedCompany.id)
     const { data: assets } = await supabase
       .from('assets')
