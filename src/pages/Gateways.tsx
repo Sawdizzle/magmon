@@ -78,8 +78,9 @@ export default function Gateways() {
     setLoading(true)
     const { data: gws } = await supabase
       .from('gateways')
-      // 'kind' is the real column ('pi' | 'pc'); alias it to 'type' for backwards-compat with the existing render code
-      .select('id, hostname, type:kind, status, last_heartbeat, site_id')
+      // 'kind' is the real column ('pi' | 'pc'); alias it to 'type' for the render code.
+      // 'status' is NOT a real column — it's computed client-side from last_heartbeat via gwStatus().
+      .select('id, hostname, type:kind, last_heartbeat, site_id')
       .eq('company_id', selectedCompany.id)
     const { data: assets } = await supabase
       .from('assets')
@@ -98,7 +99,7 @@ export default function Gateways() {
       assets?.forEach((a: { gateway_id: string | null }) => {
         if (a.gateway_id) assetCountMap[a.gateway_id] = (assetCountMap[a.gateway_id] || 0) + 1
       })
-      setGateways(gws.map((g: { id: string; hostname: string | null; type: string | null; status: string; last_heartbeat: number | null; site_id: string | null }) => ({
+      setGateways(gws.map((g: { id: string; hostname: string | null; type: string | null; last_heartbeat: number | null; site_id: string | null }) => ({
         ...g,
         status: gwStatus(g),
         site_name: g.site_id ? siteMap[g.site_id] ?? null : null,
